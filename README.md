@@ -60,7 +60,7 @@ prutil -query 'is:open is:pr author:@me org:acme sort:created-desc'
 | --- | --- |
 | left click | select a pull request in the list |
 | `j` / `k` or `↓` / `↑` | move within the focused pane; in detail, select WATCH or CHECKS |
-| `g` / `G` | jump to the first or last item |
+| `g` / `G` or `home` / `end` | jump to the first or last item |
 | `l` or `→` | focus detail from the list, or drill into the selected detail section |
 | `h`, `←` or `esc` | go back one level |
 | `enter` | open the selected pull request, or the selected check, in your browser |
@@ -73,7 +73,7 @@ prutil -query 'is:open is:pr author:@me org:acme sort:created-desc'
 | `R` | trigger an AI review on the selected open pull request by posting the configured comment |
 | `N` | check the selected open pull request for new review feedback and notify an existing agent |
 | `tab` | switch between your open and your recently closed pull requests |
-| `?` | toggle the full key list |
+| `?` | open the shortcut overlay: type to filter, `enter` to run the highlighted shortcut, `esc` or `?` to close |
 | `q` or `ctrl+c` | quit |
 
 Below 80 columns the two panes collapse into one: the list fills the terminal,
@@ -82,9 +82,11 @@ is available, select it above CHECKS and press `l` again to see its full
 schedule, activity and handoff details.
 
 The footer has one line, so it lists the actions and leaves moving about to the
-arrow keys. `?` shows every binding, including `h`, `←` and `esc` for going back,
-`W` for handing a pull request over, `R` for triggering an AI review, and
-`N` for testing automatic new-feedback notification.
+arrow keys. `?` opens an overlay listing every shortcut with a sentence on what
+it does. Start typing to fuzzy-filter it (`agent`, `copy`, or a key such as `W`),
+move with `↑` and `↓` or half a page at a time with `ctrl+d` and `ctrl+u`, press
+`enter` to run the highlighted shortcut, and `esc` to return. While it is open,
+keys go to the filter, so `q` types rather than quits; `ctrl+c` still quits.
 
 Copying uses whichever clipboard program your platform provides: `pbcopy` on
 macOS, `clip` on Windows, and `wl-copy`, `xclip` or `xsel` on Linux, whichever

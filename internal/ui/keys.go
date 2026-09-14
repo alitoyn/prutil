@@ -1,6 +1,14 @@
 package ui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"fmt"
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/relloyd/prutil/internal/model"
+)
 
 // keyMap collects every binding in the app so that the help view and the
 // update loop cannot drift apart.
@@ -116,13 +124,228 @@ func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Into, k.Open, k.Copy, k.NextTab, k.Refresh, k.Auto, k.Watch, k.Help, k.Quit}
 }
 
-// FullHelp implements help.KeyMap.
+// FullHelp implements help.KeyMap. Its groups are the overlay's sections, so
+// the two can never disagree about what belongs together.
 func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Up, k.Down, k.Top, k.Bottom},
-		{k.Into, k.Back, k.Open, k.Copy},
-		{k.Refresh, k.Auto, k.NextTab},
-		{k.Watch, k.Handoff, k.CheckHandoff, k.TriggerReview, k.Notify},
-		{k.Help, k.Quit},
+	sections := k.helpSections(false)
+	groups := make([][]key.Binding, 0, len(sections))
+	for _, section := range sections {
+		group := make([]key.Binding, 0, len(section.entries))
+		for _, entry := range section.entries {
+			group = append(group, entry.binding)
+		}
+		groups = append(groups, group)
+	}
+	return groups
+}
+
+// helpEntry is one line of the ? overlay: something the reader can press, a
+// few words naming it, and a sentence explaining it.
+type helpEntry struct {
+	binding key.Binding
+	// keys names what is pressed when it is not a key binding at all, such as
+	// a mouse click. An entry without a binding cannot be run from the overlay.
+	keys   string
+	title  string
+	detail string
+}
+
+// label is the key column of the overlay: every key the binding answers to,
+// so an alias can never go unmentioned the way it could in a hand-written
+// help string.
+func (e helpEntry) label() string {
+	if e.keys != "" {
+		return e.keys
+	}
+	return keyLabel(e.binding)
+}
+
+// runnable reports whether the overlay can press this entry's key on the
+// reader's behalf.
+func (e helpEntry) runnable() bool {
+	return len(e.binding.Keys()) > 0
+}
+
+// searchText is everything the overlay says about an entry, which a query is
+// looked for in once titles and keys have been fuzzy-matched.
+func (e helpEntry) searchText(section string) string {
+	return strings.Join([]string{e.title, e.label(), e.detail, section}, " ")
+}
+
+// helpSection is a titled group of entries in the overlay.
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
+// helpSections is everything the ? overlay lists, in the order it lists it.
+// Every binding in keyMap belongs in exactly one section; a test fails when
+// one is missing. The mouse section only appears when prutil asked the
+// terminal for the mouse.
+func (k keyMap) helpSections(mouse bool) []helpSection {
+	sections := []helpSection{
+		{title: "Navigation", entries: []helpEntry{
+			{binding: k.Up, title: "move up",
+				detail: "Move up within the focused pane. In the detail pane this selects WATCH or CHECKS."},
+			{binding: k.Down, title: "move down",
+				detail: "Move down within the focused pane. In the detail pane this selects WATCH or CHECKS."},
+			{binding: k.Top, title: "jump to the top",
+				detail: "Jump to the first item in the focused pane."},
+			{binding: k.Bottom, title: "jump to the bottom",
+				detail: "Jump to the last item in the focused pane."},
+			{binding: k.Into, title: "focus detail / drill in",
+				detail: "Focus the detail pane from the list, or drill into the selected detail section."},
+			{binding: k.Back, title: "go back",
+				detail: "Go back one level: out of an expanded section, or from the detail pane to the list."},
+		}},
+		{title: "Pull requests", entries: []helpEntry{
+			{binding: k.Open, title: "open in browser",
+				detail: "Open the selected pull request, or the selected check, in your browser."},
+			{binding: k.Copy, title: "copy URL",
+				detail: "Copy the selected pull request's URL, or the selected check's, to the clipboard."},
+			{binding: k.NextTab, title: "switch open / closed",
+				detail: "Switch between your open and your recently closed pull requests."},
+		}},
+		{title: "Refreshing", entries: []helpEntry{
+			{binding: k.Refresh, title: "refresh",
+				detail: "Reload the list and its checks from GitHub, and wake anything the watcher has backed off."},
+			{binding: k.Auto, title: "auto-refresh",
+				detail: fmt.Sprintf("Reload every %s, %d times over. Press again to add %d more.",
+					model.HumanDuration(autoRefreshInterval), autoRefreshBurst, autoRefreshBurst)},
+		}},
+		{title: "Watching and agents", entries: []helpEntry{
+			{binding: k.Watch, title: "watch / unwatch",
+				detail: "Watch the selected pull request for review feedback and failing checks, or stop watching it."},
+			{binding: k.Handoff, title: "hand to agent",
+				detail: "Hand the selected pull request's open review feedback to a coding agent now, creating one when needed."},
+			{binding: k.CheckHandoff, title: "investigate failed checks",
+				detail: "Investigate the selected pull request's failed checks now. This never creates an agent."},
+			{binding: k.TriggerReview, title: "trigger AI review",
+				detail: "Trigger an AI review on the selected open pull request by posting the configured comment. Press twice to confirm."},
+			{binding: k.Notify, title: "notify new feedback",
+				detail: "Check the selected open pull request for new review feedback and notify an existing agent."},
+		}},
+		{title: "General", entries: []helpEntry{
+			{binding: k.Help, title: "keyboard shortcuts",
+				detail: "Open this list. Type to filter, enter to run the highlighted shortcut, esc to close."},
+			{binding: k.Quit, title: "quit",
+				detail: "Quit prutil. Watched pull requests stay watched for next time."},
+		}},
+	}
+	if mouse {
+		sections = append(sections, helpSection{title: "Mouse", entries: []helpEntry{
+			{keys: "click", title: "select a pull request",
+				detail: "Left click a row in the list to select it."},
+			{keys: "wheel", title: "scroll",
+				detail: "Scroll whichever pane the pointer is over."},
+		}})
+	}
+	return sections
+}
+
+// keyGlyphs are the keys the overlay draws as arrows rather than by name.
+var keyGlyphs = map[string]string{"up": "↑", "down": "↓", "left": "←", "right": "→"}
+
+// keyGlyph is how the overlay and the README write one key.
+func keyGlyph(k string) string {
+	if glyph, ok := keyGlyphs[k]; ok {
+		return glyph
+	}
+	return k
+}
+
+// keyLabel names every key a binding answers to, in the order it lists them.
+func keyLabel(b key.Binding) string {
+	keys := b.Keys()
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, keyGlyph(k))
+	}
+	return strings.Join(out, "/")
+}
+
+// namedKeys are the key names a binding can use that are not a character.
+var namedKeys = map[string]rune{
+	"enter": tea.KeyEnter,
+	"tab":   tea.KeyTab,
+	"esc":   tea.KeyEscape,
+	"up":    tea.KeyUp,
+	"down":  tea.KeyDown,
+	"left":  tea.KeyLeft,
+	"right": tea.KeyRight,
+	"home":  tea.KeyHome,
+	"end":   tea.KeyEnd,
+}
+
+// keyPress builds the key message a binding's key string stands for. It is
+// how the overlay runs a shortcut: it presses the key on the reader's behalf.
+func keyPress(s string) tea.KeyPressMsg {
+	if code, ok := namedKeys[s]; ok {
+		return tea.KeyPressMsg{Code: code}
+	}
+	if rest, ok := strings.CutPrefix(s, "ctrl+"); ok && rest != "" {
+		return tea.KeyPressMsg{Code: []rune(rest)[0], Mod: tea.ModCtrl}
+	}
+	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
+}
+
+// overlayKeyMap holds the keys the ? overlay reads for itself. Everything else
+// typed while it is open goes to its filter, which is why these are kept apart
+// from keyMap: q has to reach the filter, so the overlay cannot share the
+// app's quit binding.
+type overlayKeyMap struct {
+	Close    key.Binding
+	Run      key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
+	// HalfPageUp and HalfPageDown are the vim and less chords. They take
+	// ctrl+u and ctrl+d from the filter, which would otherwise delete to the
+	// start of the query and delete forward; backspace and ctrl+w still edit.
+	HalfPageUp   key.Binding
+	HalfPageDown key.Binding
+	Quit         key.Binding
+}
+
+// defaultOverlayKeys returns the bindings the overlay reads before its filter.
+func defaultOverlayKeys() overlayKeyMap {
+	return overlayKeyMap{
+		Close: key.NewBinding(
+			key.WithKeys("esc", "?"),
+			key.WithHelp("esc", "close"),
+		),
+		Run: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "run"),
+		),
+		Up: key.NewBinding(
+			key.WithKeys("up", "ctrl+p"),
+			key.WithHelp("↑", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "ctrl+n"),
+			key.WithHelp("↓", "down"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup"),
+			key.WithHelp("pgup", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown"),
+			key.WithHelp("pgdown", "page down"),
+		),
+		HalfPageUp: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "half page up"),
+		),
+		HalfPageDown: key.NewBinding(
+			key.WithKeys("ctrl+d"),
+			key.WithHelp("ctrl+d", "half page down"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
+		),
 	}
 }

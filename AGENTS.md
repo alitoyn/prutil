@@ -79,6 +79,16 @@ list query that force it to walk `contexts`.
   help component drops the tail that does not fit, so `ShortHelp` is a curated
   subset rather than everything; `TestTheFooterFitsEveryShortcutAt120Columns`
   fails when a new binding pushes `q quit` off a 120-column terminal.
+- The `?` overlay (`internal/ui/helpoverlay.go`) lists `keyMap.helpSections`,
+  which also backs `FullHelp`. A new binding needs an entry there with a title
+  and a detail sentence: `TestEveryBindingIsListedInTheShortcutOverlay` fails
+  without one, and `TestTheReadmeKeysTableNamesEveryBindingsKeys` fails until
+  README's Keys table names every key it answers to. `enter` in the overlay
+  runs a shortcut by replaying the binding's first key through `handleKey`, so
+  that key must be one `handleKey` matches. While the overlay is open, `Update`
+  hands it key, paste and mouse messages before anything else; its own keys
+  live in `overlayKeyMap`, apart from `keyMap`, because `q` must reach the
+  filter.
 - Tests must not run a `tea.Tick` command. `drain` calls the command, so
   draining one blocks for the whole interval. Send the message the tick would
   have produced instead, the way the `selectionMsg` and `autoRefreshMsg` tests

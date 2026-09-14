@@ -52,6 +52,9 @@ func (a *App) render() string {
 	if len(lines) > a.height {
 		lines = lines[:a.height]
 	}
+	if a.overlay.open {
+		lines = a.renderHelpOverlay(lines)
+	}
 	return strings.Join(lines, "\n")
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 	"github.com/stretchr/testify/assert"
@@ -28,6 +29,15 @@ func TestProgramRunsEndToEnd(t *testing.T) {
 		return bytes.Contains([]byte(screen), []byte("relloyd/prutil")) &&
 			bytes.Contains([]byte(screen), []byte("CHECKS (3)"))
 	}, teatest.WithDuration(5*time.Second))
+
+	// The overlay has the keyboard while it is open, so q only quits below if
+	// esc really did close it.
+	tm.Type("?")
+	teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
+		return bytes.Contains([]byte(ansi.Strip(string(out))), []byte("Keyboard shortcuts"))
+	}, teatest.WithDuration(5*time.Second))
+	tm.Type("wat")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	tm.Type("q")
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))

@@ -394,14 +394,13 @@ func TestABackgroundViewErrorDoesNotDisturbTheVisibleOne(t *testing.T) {
 
 func TestHelpToggles(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
-	require.False(t, app.showHelp)
+	require.False(t, app.overlay.open)
 
 	send(t, app, press("?"))
-	assert.True(t, app.showHelp)
-	assert.True(t, app.help.ShowAll)
+	assert.True(t, app.overlay.open)
 
 	send(t, app, press("?"))
-	assert.False(t, app.showHelp)
+	assert.False(t, app.overlay.open)
 }
 
 func TestBackgroundColourRebuildsTheStyles(t *testing.T) {

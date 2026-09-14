@@ -363,13 +363,16 @@ func TestTheFooterFitsEveryShortcutAt120Columns(t *testing.T) {
 	assert.NotContains(t, footer, "R trigger AI review", "R belongs only in full help")
 }
 
-func TestTheFullHelpStillListsTheMovementKeysTheFooterLeavesOut(t *testing.T) {
+func TestTheShortcutOverlayListsTheKeysTheFooterLeavesOut(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
-	require.NotContains(t, plain(app.render()), "↑/k up", "the footer has no room for them")
+	require.NotContains(t, plain(app.render()), "↑/k", "the footer has no room for them")
 
 	send(t, app, press("?"))
 	full := plain(app.render())
-	for _, want := range []string{"↑/k", "↓/j", "g", "G", "y", "a", "back", "W hand to agent", "R trigger AI review", "N notify new feedback"} {
+	for _, want := range []string{
+		"↑/k", "↓/j", "g/home", "G/end", "←/h/esc", "y/c", "q/ctrl+c",
+		"hand to agent", "trigger AI review", "notify new feedback", "select a pull request",
+	} {
 		assert.Contains(t, full, want)
 	}
 }

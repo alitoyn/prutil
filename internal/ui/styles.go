@@ -1,6 +1,10 @@
 package ui
 
-import "charm.land/lipgloss/v2"
+import (
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
 
 // Styles holds every colour and text style the TUI uses. Keeping them in one
 // place means the palette can be retuned without touching layout code.
@@ -24,6 +28,14 @@ type Styles struct {
 	Error      lipgloss.Style
 	Status     lipgloss.Style
 	SectionHdr lipgloss.Style
+
+	// The ? overlay: its frame, the title set into it, the key column, the
+	// characters a filter matched, and the dimmed screen behind it.
+	OverlayBorder lipgloss.Style
+	OverlayTitle  lipgloss.Style
+	OverlayKey    lipgloss.Style
+	MatchHit      lipgloss.Style
+	Backdrop      lipgloss.Style
 
 	BadgeDraft    lipgloss.Style
 	BadgeMerged   lipgloss.Style
@@ -86,6 +98,12 @@ func newStyles(isDark bool) Styles {
 		Status:     base.Foreground(amber),
 		SectionHdr: base.Foreground(muted).Bold(true),
 
+		OverlayBorder: base.Foreground(accent),
+		OverlayTitle:  base.Foreground(text).Bold(true),
+		OverlayKey:    base.Foreground(teal).Bold(true),
+		MatchHit:      base.Foreground(amber).Bold(true).Underline(true),
+		Backdrop:      base.Foreground(border),
+
 		BadgeDraft:    badge.Foreground(grey),
 		BadgeMerged:   badge.Foreground(accent),
 		BadgeClosed:   badge.Foreground(red),
@@ -99,5 +117,17 @@ func newStyles(isDark bool) Styles {
 		Pending:  base.Foreground(amber),
 		Neutral:  base.Foreground(grey),
 		Selected: base.Background(selected),
+	}
+}
+
+// helpInput styles the overlay's filter from the palette. The cursor does not
+// blink: a blinking cursor is a timer that runs for as long as the overlay is
+// open, and a redraw loop is not worth a flashing block.
+func (s Styles) helpInput() textinput.Styles {
+	state := textinput.StyleState{Text: s.Title, Placeholder: s.Muted, Prompt: s.Accent}
+	return textinput.Styles{
+		Focused: state,
+		Blurred: state,
+		Cursor:  textinput.CursorStyle{Color: s.Accent.GetForeground(), Shape: tea.CursorBlock},
 	}
 }

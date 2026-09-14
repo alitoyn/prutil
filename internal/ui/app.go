@@ -212,11 +212,12 @@ type App struct {
 
 	focus pane
 	// mouse is whether prutil asks the terminal for mouse reporting.
-	mouse    bool
-	width    int
-	height   int
-	status   string
-	showHelp bool
+	mouse  bool
+	width  int
+	height int
+	status string
+	// overlay is the ? shortcut list, drawn over everything else while open.
+	overlay helpOverlay
 
 	// gen is bumped on every refresh; replies carrying an older generation are
 	// discarded so a slow request cannot overwrite fresher data.
@@ -402,6 +403,14 @@ func (a *App) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The shortcut overlay has the keyboard and the mouse while it is open.
+	// Everything else, the replies from GitHub included, carries on as usual.
+	if a.overlay.open {
+		if cmd, handled := a.updateHelpOverlay(msg); handled {
+			return a, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
@@ -415,11 +424,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		a.clampScroll()
+		a.resizeHelp()
 		return a, nil
 
 	case tea.BackgroundColorMsg:
 		a.styles = newStyles(msg.IsDark())
 		a.spin.Style = a.styles.Accent
+		a.restyleHelp()
 		return a, nil
 
 	case tea.KeyPressMsg:
@@ -606,9 +617,7 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case key.Matches(msg, a.keys.Help):
-		a.showHelp = !a.showHelp
-		a.help.ShowAll = a.showHelp
-		return a, nil
+		return a, a.openHelp()
 
 	case key.Matches(msg, a.keys.Refresh):
 		return a, a.refresh("refreshing…")
