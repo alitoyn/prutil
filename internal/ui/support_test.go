@@ -56,8 +56,8 @@ type fakeClient struct {
 }
 
 type commentRecord struct {
-	key  model.Key
-	body string
+	subjectID string
+	body      string
 }
 
 func newFakeClient(prs []model.PullRequest, checks map[model.Key][]model.Check) *fakeClient {
@@ -168,13 +168,13 @@ func (f *fakeClient) callsFor(key model.Key) int {
 	return f.checkCalls[key]
 }
 
-func (f *fakeClient) AddComment(_ context.Context, key model.Key, body string) error {
+func (f *fakeClient) AddComment(_ context.Context, subjectID string, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.commentErr != nil {
 		return f.commentErr
 	}
-	f.commentCalls = append(f.commentCalls, commentRecord{key: key, body: body})
+	f.commentCalls = append(f.commentCalls, commentRecord{subjectID: subjectID, body: body})
 	return nil
 }
 

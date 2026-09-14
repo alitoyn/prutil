@@ -45,8 +45,9 @@ type Client interface {
 	// question behind the watch feature: which feedback is still open, and
 	// whose turn it is.
 	ReviewThreads(ctx context.Context, key model.Key) (Review, error)
-	// AddComment posts a top-level conversation comment to a pull request.
-	AddComment(ctx context.Context, key model.Key, body string) error
+	// AddComment posts a top-level conversation comment to a pull request
+	// subject (by its GitHub node ID).
+	AddComment(ctx context.Context, subjectID string, body string) error
 }
 
 // Review is the review conversation on one pull request.
@@ -586,24 +587,30 @@ func (c *CLI) ReviewThreads(ctx context.Context, key model.Key) (Review, error) 
 	}, nil
 }
 
-// AddComment posts a top-level comment to a pull request using the gh CLI.
-func (c *CLI) AddComment(ctx context.Context, key model.Key, body string) error {
-	if strings.TrimSpace(key.Repo) == "" || key.Number <= 0 {
-		return fmt.Errorf("malformed pull request %s", key)
+const addCommentMutation = `mutation($subjectId: ID!, $body: String!) {
+	addComment(input: {subjectId: $subjectId, body: $body}) {
+		clientMutationId
+	}
+}`
+
+// AddComment posts a top-level conversation comment to a pull request.
+func (c *CLI) AddComment(ctx context.Context, subjectID, body string) error {
+	if strings.TrimSpace(subjectID) == "" {
+		return fmt.Errorf("subjectID cannot be empty")
 	}
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("comment body cannot be empty")
 	}
 
-	select {
-	case c.sem <- struct{}{}:
-		defer func() { <-c.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
+	var resp struct {
+		AddComment struct {
+			ClientMutationID string `json:"clientMutationId"`
+		} `json:"addComment"`
 	}
-
-	_, err := c.runner.Run(ctx, "pr", "comment", strconv.Itoa(key.Number), "--repo", key.Repo, "--body", body)
-	return err
+	return c.graphql(ctx, addCommentMutation, map[string]any{
+		"subjectId": subjectID,
+		"body":      body,
+	}, &resp)
 }
 
 // graphql runs one gh api graphql call and decodes its data envelope into out.

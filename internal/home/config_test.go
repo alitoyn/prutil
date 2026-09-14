@@ -56,19 +56,32 @@ func TestOneConfigurationCannotChangeAnothersDefaultMarker(t *testing.T) {
 func TestReviewCommentDefaultsToBuiltIn(t *testing.T) {
 	cfg, err := home.ParseConfig([]byte("watch:\n  base_interval: 5m\n"))
 	require.NoError(t, err)
-	assert.Equal(t, home.DefaultReviewComment, cfg.Review.Comment)
+	assert.Equal(t, home.DefaultReviewComment, cfg.Review.CommentFor("relloyd/prutil"))
 }
 
 func TestReviewCommentCanBeOverridden(t *testing.T) {
 	cfg, err := home.ParseConfig([]byte("review:\n  comment: \"/gemini review --full\"\n"))
 	require.NoError(t, err)
-	assert.Equal(t, "/gemini review --full", cfg.Review.Comment)
+	assert.Equal(t, "/gemini review --full", cfg.Review.CommentFor("relloyd/prutil"))
 }
 
-func TestReviewCommentEmptyStringFallsBackToDefault(t *testing.T) {
-	cfg, err := home.ParseConfig([]byte("review:\n  comment: \"   \"\n"))
+func TestReviewCommentEmptyStringDisablesFeature(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte("review:\n  comment: \"\"\n"))
 	require.NoError(t, err)
-	assert.Equal(t, home.DefaultReviewComment, cfg.Review.Comment)
+	assert.Empty(t, cfg.Review.CommentFor("relloyd/prutil"))
+}
+
+func TestReviewCommentPerRepoOverrides(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte(`review:
+  comment: "/gemini review"
+  repos:
+    org/coderabbit-repo: "@coderabbitai review"
+    org/disabled-repo: ""
+`))
+	require.NoError(t, err)
+	assert.Equal(t, "@coderabbitai review", cfg.Review.CommentFor("org/coderabbit-repo"))
+	assert.Empty(t, cfg.Review.CommentFor("org/disabled-repo"))
+	assert.Equal(t, "/gemini review", cfg.Review.CommentFor("org/other-repo"))
 }
 
 func TestTheWrittenTemplateNamesReviewComment(t *testing.T) {

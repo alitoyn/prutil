@@ -295,6 +295,20 @@ func (e *Engine) Wake(now time.Time) {
 	}
 }
 
+// WakeKey brings one armed pull request forward to now and clears any
+// dormancy, which is what asking for an AI review should do: feedback is
+// expected soon, so prutil stops economising on that pull request.
+func (e *Engine) WakeKey(key model.Key, now time.Time) {
+	got, ok := e.prs[key]
+	if !ok {
+		return
+	}
+	got.dormant = false
+	got.atCap = 0
+	got.interval = e.cfg.BaseInterval.Duration()
+	got.dueAt = now
+}
+
 // Forget drops one pull request, which is what disarming does.
 func (e *Engine) Forget(key model.Key) { delete(e.prs, key) }
 

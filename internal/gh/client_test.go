@@ -754,27 +754,31 @@ func TestTheListCarriesTheNodeIdTheWatcherNeeds(t *testing.T) {
 	}
 }
 
-func TestAddCommentRunsGhPrComment(t *testing.T) {
-	runner := &fakeRunner{responses: [][]byte{[]byte("")}}
+func TestAddCommentIssuesGraphQLMutation(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{
+		[]byte(`{"data":{"addComment":{"clientMutationId":"abc"}}}`),
+	}}
 	client := gh.New(runner, 1)
 
-	key := model.Key{Repo: "relloyd/prutil", Number: 42}
-	err := client.AddComment(context.Background(), key, "/gemini review")
+	err := client.AddComment(context.Background(), "PR_kwDO123", "/gemini review")
 	require.NoError(t, err)
 
 	require.Equal(t, 1, runner.callCount())
-	assert.Equal(t, "pr comment 42 --repo relloyd/prutil --body /gemini review", runner.argsOf(0))
+	args := runner.argsOf(0)
+	assert.Contains(t, args, "api graphql")
+	assert.Contains(t, args, "body=/gemini review")
+	assert.Contains(t, args, "subjectId=PR_kwDO123")
 }
 
 func TestAddCommentValidatesArguments(t *testing.T) {
 	client := gh.New(&fakeRunner{}, 1)
 
-	err := client.AddComment(context.Background(), model.Key{Repo: "", Number: 42}, "/gemini review")
+	err := client.AddComment(context.Background(), "", "/gemini review")
 	assert.Error(t, err)
 
-	err = client.AddComment(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 0}, "/gemini review")
+	err = client.AddComment(context.Background(), "   ", "/gemini review")
 	assert.Error(t, err)
 
-	err = client.AddComment(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 42}, "   ")
+	err = client.AddComment(context.Background(), "PR_kwDO123", "   ")
 	assert.Error(t, err)
 }

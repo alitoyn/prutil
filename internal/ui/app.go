@@ -250,6 +250,10 @@ type App struct {
 	// watchSeq names the watch schedule currently in flight, the same way
 	// autoSeq names a run of auto-refresh ticks.
 	watchSeq int
+	// pendingReviewKey and pendingReviewAt track the two-press confirmation
+	// for triggering an AI review.
+	pendingReviewKey model.Key
+	pendingReviewAt  time.Time
 	// runtime is what the app knows about each pull request beyond the list
 	// row itself. See prRuntime.
 	runtime map[model.Key]*prRuntime
@@ -262,11 +266,11 @@ type App struct {
 // written from six places and cleaned up from four, and two of the defects
 // this code has already had were a cleanup that reached five of them.
 type prRuntime struct {
-	// handing, reviewing and triggeringReview name work in flight, which is
+	// handing, reviewing and requestingReview name work in flight, which is
 	// what stops a held key sending the same work twice.
 	handing          bool
 	reviewing        bool
-	triggeringReview bool
+	requestingReview bool
 	// operation says what that work is, in words, for the detail pane.
 	operation string
 	// feedback is the last known count of review threads still waiting on the
@@ -312,7 +316,7 @@ func (a *App) mutate(key model.Key) *prRuntime {
 // anyInFlight reports whether any pull request has watcher work outstanding.
 func (a *App) anyInFlight() bool {
 	for _, got := range a.runtime {
-		if got.handing || got.reviewing || got.triggeringReview {
+		if got.handing || got.reviewing || got.requestingReview {
 			return true
 		}
 	}
@@ -567,14 +571,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case triggerReviewMsg:
-		a.mutate(msg.key).triggeringReview = false
-		a.setWatchOperation(msg.key, "")
+		entry := a.mutate(msg.key)
+		entry.requestingReview = false
+		if entry.operation == "triggering AI review" {
+			entry.operation = ""
+		}
 		if msg.err != nil {
 			a.recordWatchActivity(msg.key, "could not trigger AI review: "+msg.err.Error())
 			return a, status(fmt.Sprintf("could not trigger AI review on %s: %s", msg.key, msg.err.Error()))
 		}
+		a.engine.WakeKey(msg.key, a.now())
 		a.recordWatchActivity(msg.key, fmt.Sprintf("triggered AI review (%s)", msg.comment))
-		return a, status(fmt.Sprintf("triggered AI review on %s (%s)", msg.key, msg.comment))
+		return a, tea.Batch(
+			a.scheduleWatch(),
+			status(fmt.Sprintf("triggered AI review on %s (%s)", msg.key, msg.comment)),
+		)
 
 	case statusMsg:
 		a.status = string(msg)
@@ -1188,7 +1199,7 @@ func (a *App) onlyHandoffOutstanding() bool {
 	}
 	handing := false
 	for _, got := range a.runtime {
-		if got.reviewing || got.triggeringReview {
+		if got.reviewing || got.requestingReview {
 			return false
 		}
 		handing = handing || got.handing

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -404,7 +403,7 @@ func (a *App) notifyNewFeedback() tea.Cmd {
 }
 
 // triggerAIReview posts the configured review trigger comment to the selected
-// open pull request.
+// open pull request after confirmation.
 func (a *App) triggerAIReview() tea.Cmd {
 	if a.active != viewOpen {
 		return status("AI review is available only for open pull requests")
@@ -414,34 +413,46 @@ func (a *App) triggerAIReview() tea.Cmd {
 		return nil
 	}
 	key := pr.Key()
-	if a.runtimeOf(key).triggeringReview {
+	comment := a.homeCfg.Review.CommentFor(key.Repo)
+	if comment == "" {
+		return status("AI review is not configured (set review.comment in config)")
+	}
+	if a.runtimeOf(key).requestingReview {
 		return status("already triggering AI review for " + key.String())
 	}
-
-	a.mutate(key).triggeringReview = true
-	comment := a.homeCfg.Review.Comment
-	if strings.TrimSpace(comment) == "" {
-		comment = home.DefaultReviewComment
+	if a.runtimeOf(key).handing {
+		return status("already handing " + key.String() + " over")
+	}
+	if a.runtimeOf(key).reviewing {
+		return status("already reading review feedback on " + key.String())
 	}
 
+	if a.pendingReviewKey != key || a.now().Sub(a.pendingReviewAt) >= statusLifetime {
+		a.pendingReviewKey = key
+		a.pendingReviewAt = a.now()
+		return status(fmt.Sprintf("press R again to post %s on %s", comment, key))
+	}
+	a.pendingReviewKey = model.Key{}
+
+	a.mutate(key).requestingReview = true
 	a.setWatchOperation(key, "triggering AI review")
 	a.recordWatchActivity(key, "triggering AI review ("+comment+")")
 	return tea.Batch(
-		a.sendAIReviewComment(key, comment),
+		a.sendAIReviewComment(pr, comment),
 		a.spin.Tick,
 		status(fmt.Sprintf("triggering AI review on %s…", key)),
 	)
 }
 
 // sendAIReviewComment issues the comment request asynchronously via the GitHub client.
-func (a *App) sendAIReviewComment(key model.Key, comment string) tea.Cmd {
+func (a *App) sendAIReviewComment(pr model.PullRequest, comment string) tea.Cmd {
 	client := a.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 
-		err := client.AddComment(ctx, key, comment)
-		return triggerReviewMsg{key: key, comment: comment, err: err}
+		err := client.AddComment(ctx, pr.NodeID, comment)
+		return triggerReviewMsg{key: pr.Key(), comment: comment, err: err}
 	}
 }
 

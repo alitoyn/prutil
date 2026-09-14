@@ -59,9 +59,33 @@ type Config struct {
 
 // ReviewConfig governs triggering an automated AI review on a pull request.
 type ReviewConfig struct {
-	// Comment is the comment text posted to a pull request to trigger an AI
-	// review. Defaults to "/gemini review".
-	Comment string `yaml:"comment"`
+	// Comment is the default comment text posted to a pull request to trigger
+	// an AI review. Defaults to "/gemini review". Set to "" to disable.
+	Comment *string `yaml:"comment"`
+	// Repos maps a repository in owner/name form to a repository-specific
+	// comment text, or "" to disable the trigger for that repository.
+	Repos map[string]string `yaml:"repos"`
+}
+
+// defaultReviewComment returns a fresh pointer to the built-in review comment.
+func defaultReviewComment() *string {
+	comment := DefaultReviewComment
+	return &comment
+}
+
+// CommentFor returns the review comment configured for the given repository
+// ("owner/name"), falling back to the global comment. Returns "" when the
+// feature is unconfigured or disabled.
+func (r ReviewConfig) CommentFor(repo string) string {
+	if r.Repos != nil {
+		if val, ok := r.Repos[repo]; ok {
+			return strings.TrimSpace(val)
+		}
+	}
+	if r.Comment != nil {
+		return strings.TrimSpace(*r.Comment)
+	}
+	return DefaultReviewComment
 }
 
 // DiscoveryConfig controls checkout discovery on disk.
@@ -170,7 +194,8 @@ func DefaultConfig() Config {
 			SelfTestMarker:      defaultMarker(),
 		},
 		Review: ReviewConfig{
-			Comment: DefaultReviewComment,
+			Comment: defaultReviewComment(),
+			Repos:   map[string]string{},
 		},
 		Repos: map[string]string{},
 		Discovery: DiscoveryConfig{
@@ -208,8 +233,8 @@ func (c *Config) clamp() {
 	if c.Herdr.WaitForIdle < 0 {
 		c.Herdr.WaitForIdle = 0
 	}
-	if strings.TrimSpace(c.Review.Comment) == "" {
-		c.Review.Comment = DefaultReviewComment
+	if c.Review.Repos == nil {
+		c.Review.Repos = map[string]string{}
 	}
 
 	w := &c.Watch

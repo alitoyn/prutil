@@ -82,8 +82,8 @@ is available, select it above CHECKS and press `l` again to see its full
 schedule, activity and handoff details.
 
 The footer has one line, so it lists the actions and leaves moving about to the
-arrow keys. `?` shows every binding, including `h`, `←` and `esc` for going back
-and `W` for handing a pull request over and `R` for triggering an AI review and
+arrow keys. `?` shows every binding, including `h`, `←` and `esc` for going back,
+`W` for handing a pull request over, `R` for triggering an AI review, and
 `N` for testing automatic new-feedback notification.
 
 Copying uses whichever clipboard program your platform provides: `pbcopy` on
@@ -228,7 +228,8 @@ doing:
 
 Anything at all changing puts a pull request back to the top of that ladder. A
 pull request prutil has stopped asking about is still armed, and its `◉` turns
-hollow to say so; `r` wakes it, along with everything else.
+hollow to say so; `r` wakes it, along with everything else, while `R` (triggering
+an AI review) wakes that specific pull request.
 
 ### Configuration
 
@@ -257,7 +258,9 @@ watch:
   force_precise_every: 5    # polls before the expensive question is asked anyway
   self_test_marker: "<!-- prutil:test -->"  # "" turns it off
 review:
-  comment: "/gemini review"  # comment posted by R to trigger an AI review
+  comment: "/gemini review"  # comment posted by R to trigger an AI review; "" turns it off
+  repos:
+    acme/widgets: "@coderabbitai review"  # optional per-repository override
 repos:
   acme/widgets: ~/src/widgets  # optional explicit checkout for W
 discovery:

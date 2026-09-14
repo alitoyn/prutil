@@ -53,7 +53,11 @@ func DefaultConfigTemplate() []byte {
 
 	out.WriteString("review:\n")
 	out.WriteString("  # Optional: comment posted to a pull request to trigger an AI review.\n")
-	_, _ = fmt.Fprintf(&out, "  comment: %q\n\n", cfg.Review.Comment)
+	out.WriteString("  # Set to \"\" to disable. Defaults to \"/gemini review\".\n")
+	_, _ = fmt.Fprintf(&out, "  comment: %q\n", cfg.Review.CommentFor(""))
+	out.WriteString("  # Optional per-repository overrides:\n")
+	out.WriteString("  # repos:\n")
+	out.WriteString("  #   owner/repo: \"@coderabbitai review\"\n\n")
 
 	out.WriteString("# Optional explicit checkout locations by owner/name.\n")
 	out.WriteString("# Example:\n")
