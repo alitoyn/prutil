@@ -402,6 +402,60 @@ func (a *App) notifyNewFeedback() tea.Cmd {
 	)
 }
 
+// triggerAIReview posts the configured review trigger comment to the selected
+// open pull request after confirmation.
+func (a *App) triggerAIReview() tea.Cmd {
+	if a.active != viewOpen {
+		return status("AI review is available only for open pull requests")
+	}
+	pr, ok := a.selectedPR()
+	if !ok {
+		return nil
+	}
+	key := pr.Key()
+	comment := a.homeCfg.Review.CommentFor(key.Repo)
+	if comment == "" {
+		return status("AI review is not configured (set review.comment in config)")
+	}
+	if a.runtimeOf(key).requestingReview {
+		return status("already triggering AI review for " + key.String())
+	}
+	if a.runtimeOf(key).handing {
+		return status("already handing " + key.String() + " over")
+	}
+	if a.runtimeOf(key).reviewing {
+		return status("already reading review feedback on " + key.String())
+	}
+
+	if a.pendingReviewKey != key || a.now().Sub(a.pendingReviewAt) >= statusLifetime {
+		a.pendingReviewKey = key
+		a.pendingReviewAt = a.now()
+		return status(fmt.Sprintf("press R again to post %s on %s", comment, key))
+	}
+	a.pendingReviewKey = model.Key{}
+
+	a.mutate(key).requestingReview = true
+	a.setWatchOperation(key, "triggering AI review")
+	a.recordWatchActivity(key, "triggering AI review ("+comment+")")
+	return tea.Batch(
+		a.sendAIReviewComment(pr, comment),
+		a.spin.Tick,
+		status(fmt.Sprintf("triggering AI review on %s…", key)),
+	)
+}
+
+// sendAIReviewComment issues the comment request asynchronously via the GitHub client.
+func (a *App) sendAIReviewComment(pr model.PullRequest, comment string) tea.Cmd {
+	client := a.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+
+		err := client.AddComment(ctx, pr.NodeID, comment)
+		return triggerReviewMsg{key: pr.Key(), comment: comment, err: err}
+	}
+}
+
 // prByKey finds a pull request in the open list.
 func (a *App) prByKey(key model.Key) (model.PullRequest, bool) {
 	for _, pr := range a.views[viewOpen].prs {
@@ -735,5 +789,12 @@ type handoffMsg struct {
 	// nothing means there was no open feedback to send, so no agent was asked.
 	nothing bool
 	result  handoff.Result
+	err     error
+}
+
+// triggerReviewMsg reports the outcome of posting a review trigger comment.
+type triggerReviewMsg struct {
+	key     model.Key
+	comment string
 	err     error
 }

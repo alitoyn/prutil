@@ -51,6 +51,14 @@ func DefaultConfigTemplate() []byte {
 	_, _ = fmt.Fprintf(&out, "  self_test_marker: %q\n", cfg.Watch.Marker())
 	_, _ = fmt.Fprintf(&out, "  force_precise_every: %d\n\n", cfg.Watch.ForcePreciseEvery)
 
+	out.WriteString("review:\n")
+	out.WriteString("  # Optional: comment posted to a pull request to trigger an AI review.\n")
+	out.WriteString("  # Set to \"\" to disable. Defaults to \"/gemini review\".\n")
+	_, _ = fmt.Fprintf(&out, "  comment: %q\n", cfg.Review.CommentFor(""))
+	out.WriteString("  # Optional per-repository overrides:\n")
+	out.WriteString("  # repos:\n")
+	out.WriteString("  #   owner/repo: \"@coderabbitai review\"\n\n")
+
 	out.WriteString("# Optional explicit checkout locations by owner/name.\n")
 	out.WriteString("# Example:\n")
 	out.WriteString("# repos:\n")

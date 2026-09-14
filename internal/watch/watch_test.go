@@ -328,6 +328,29 @@ func TestWakingBringsEverythingForwardIncludingWhatHadGoneDormant(t *testing.T) 
 	assert.Equal(t, watch.TierSettled, tierOf(t, e, key))
 }
 
+func TestWakeKeyBringsSinglePullRequestForward(t *testing.T) {
+	e := engine(t)
+	e.Sync([]model.Key{key, other}, start)
+
+	reading := snap(start, model.StatusSuccess)
+	now := start
+	for range 20 {
+		e.Observe([]model.Snapshot{reading, {Key: other, NodeID: "PR_2", HeadOID: "456", Rollup: model.StatusSuccess}}, now)
+		next, ok := e.NextDue()
+		if !ok {
+			break
+		}
+		now = next
+	}
+	require.Equal(t, watch.TierDormant, tierOf(t, e, key))
+	require.Equal(t, watch.TierDormant, tierOf(t, e, other))
+
+	e.WakeKey(key, now)
+	assert.Equal(t, []model.Key{key}, e.Due(now), "only the woken PR is due now")
+	assert.Equal(t, watch.TierSettled, tierOf(t, e, key))
+	assert.Equal(t, watch.TierDormant, tierOf(t, e, other))
+}
+
 func TestReadingsForPullRequestsNobodyArmedAreIgnored(t *testing.T) {
 	e := engine(t)
 	e.Sync([]model.Key{key}, start)

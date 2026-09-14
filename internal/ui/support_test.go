@@ -50,6 +50,14 @@ type fakeClient struct {
 	watchErr   error
 	watchIDs   [][]string
 	watchCalls int
+	// comments records every AddComment call.
+	commentCalls []commentRecord
+	commentErr   error
+}
+
+type commentRecord struct {
+	subjectID string
+	body      string
 }
 
 func newFakeClient(prs []model.PullRequest, checks map[model.Key][]model.Check) *fakeClient {
@@ -158,6 +166,22 @@ func (f *fakeClient) callsFor(key model.Key) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.checkCalls[key]
+}
+
+func (f *fakeClient) AddComment(_ context.Context, subjectID string, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.commentErr != nil {
+		return f.commentErr
+	}
+	f.commentCalls = append(f.commentCalls, commentRecord{subjectID: subjectID, body: body})
+	return nil
+}
+
+func (f *fakeClient) comments() []commentRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]commentRecord(nil), f.commentCalls...)
 }
 
 // fakeClipboard records what the app asked to copy.

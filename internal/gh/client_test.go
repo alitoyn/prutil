@@ -753,3 +753,32 @@ func TestTheListCarriesTheNodeIdTheWatcherNeeds(t *testing.T) {
 		assert.NotEmpty(t, pr.NodeID, pr.Key().String())
 	}
 }
+
+func TestAddCommentIssuesGraphQLMutation(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{
+		[]byte(`{"data":{"addComment":{"clientMutationId":"abc"}}}`),
+	}}
+	client := gh.New(runner, 1)
+
+	err := client.AddComment(context.Background(), "PR_kwDO123", "/gemini review")
+	require.NoError(t, err)
+
+	require.Equal(t, 1, runner.callCount())
+	args := runner.argsOf(0)
+	assert.Contains(t, args, "api graphql")
+	assert.Contains(t, args, "body=/gemini review")
+	assert.Contains(t, args, "subjectId=PR_kwDO123")
+}
+
+func TestAddCommentValidatesArguments(t *testing.T) {
+	client := gh.New(&fakeRunner{}, 1)
+
+	err := client.AddComment(context.Background(), "", "/gemini review")
+	assert.Error(t, err)
+
+	err = client.AddComment(context.Background(), "   ", "/gemini review")
+	assert.Error(t, err)
+
+	err = client.AddComment(context.Background(), "PR_kwDO123", "   ")
+	assert.Error(t, err)
+}
