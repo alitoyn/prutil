@@ -70,6 +70,7 @@ prutil -query 'is:open is:pr author:@me org:acme sort:created-desc'
 | `w` | watch the selected pull request, or stop watching it |
 | `W` | hand the selected pull request's open review feedback to a coding agent now, creating one when needed |
 | `F` | investigate the selected pull request's failed checks now; this never creates an agent |
+| `R` | trigger an AI review on the selected open pull request by posting the configured comment |
 | `N` | check the selected open pull request for new review feedback and notify an existing agent |
 | `tab` | switch between your open and your recently closed pull requests |
 | `?` | toggle the full key list |
@@ -82,8 +83,8 @@ schedule, activity and handoff details.
 
 The footer has one line, so it lists the actions and leaves moving about to the
 arrow keys. `?` shows every binding, including `h`, `←` and `esc` for going back
-and `W` for handing a pull request over and `N` for testing automatic
-new-feedback notification.
+and `W` for handing a pull request over and `R` for triggering an AI review and
+`N` for testing automatic new-feedback notification.
 
 Copying uses whichever clipboard program your platform provides: `pbcopy` on
 macOS, `clip` on Windows, and `wl-copy`, `xclip` or `xsel` on Linux, whichever
@@ -255,6 +256,8 @@ watch:
   dormant_after: 3          # polls at the cap before prutil stops asking
   force_precise_every: 5    # polls before the expensive question is asked anyway
   self_test_marker: "<!-- prutil:test -->"  # "" turns it off
+review:
+  comment: "/gemini review"  # comment posted by R to trigger an AI review
 repos:
   acme/widgets: ~/src/widgets  # optional explicit checkout for W
 discovery:

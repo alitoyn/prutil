@@ -52,3 +52,27 @@ func TestOneConfigurationCannotChangeAnothersDefaultMarker(t *testing.T) {
 	assert.Equal(t, model.DefaultSelfTestMarker, after.Watch.Marker())
 	assert.Equal(t, model.DefaultSelfTestMarker, home.DefaultConfig().Watch.Marker())
 }
+
+func TestReviewCommentDefaultsToBuiltIn(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte("watch:\n  base_interval: 5m\n"))
+	require.NoError(t, err)
+	assert.Equal(t, home.DefaultReviewComment, cfg.Review.Comment)
+}
+
+func TestReviewCommentCanBeOverridden(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte("review:\n  comment: \"/gemini review --full\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "/gemini review --full", cfg.Review.Comment)
+}
+
+func TestReviewCommentEmptyStringFallsBackToDefault(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte("review:\n  comment: \"   \"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, home.DefaultReviewComment, cfg.Review.Comment)
+}
+
+func TestTheWrittenTemplateNamesReviewComment(t *testing.T) {
+	tmpl := string(home.DefaultConfigTemplate())
+	assert.Contains(t, tmpl, "review:")
+	assert.Contains(t, tmpl, "comment: \"/gemini review\"")
+}

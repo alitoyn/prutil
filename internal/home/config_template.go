@@ -51,6 +51,10 @@ func DefaultConfigTemplate() []byte {
 	_, _ = fmt.Fprintf(&out, "  self_test_marker: %q\n", cfg.Watch.Marker())
 	_, _ = fmt.Fprintf(&out, "  force_precise_every: %d\n\n", cfg.Watch.ForcePreciseEvery)
 
+	out.WriteString("review:\n")
+	out.WriteString("  # Optional: comment posted to a pull request to trigger an AI review.\n")
+	_, _ = fmt.Fprintf(&out, "  comment: %q\n\n", cfg.Review.Comment)
+
 	out.WriteString("# Optional explicit checkout locations by owner/name.\n")
 	out.WriteString("# Example:\n")
 	out.WriteString("# repos:\n")

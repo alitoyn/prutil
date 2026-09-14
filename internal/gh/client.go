@@ -45,6 +45,8 @@ type Client interface {
 	// question behind the watch feature: which feedback is still open, and
 	// whose turn it is.
 	ReviewThreads(ctx context.Context, key model.Key) (Review, error)
+	// AddComment posts a top-level conversation comment to a pull request.
+	AddComment(ctx context.Context, key model.Key, body string) error
 }
 
 // Review is the review conversation on one pull request.
@@ -582,6 +584,26 @@ func (c *CLI) ReviewThreads(ctx context.Context, key model.Key) (Review, error) 
 		Viewer:    resp.Viewer.Login,
 		Truncated: resp.Repository.PullRequest.ReviewThreads.TotalCount > len(nodes),
 	}, nil
+}
+
+// AddComment posts a top-level comment to a pull request using the gh CLI.
+func (c *CLI) AddComment(ctx context.Context, key model.Key, body string) error {
+	if strings.TrimSpace(key.Repo) == "" || key.Number <= 0 {
+		return fmt.Errorf("malformed pull request %s", key)
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("comment body cannot be empty")
+	}
+
+	select {
+	case c.sem <- struct{}{}:
+		defer func() { <-c.sem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	_, err := c.runner.Run(ctx, "pr", "comment", strconv.Itoa(key.Number), "--repo", key.Repo, "--body", body)
+	return err
 }
 
 // graphql runs one gh api graphql call and decodes its data envelope into out.

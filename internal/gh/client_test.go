@@ -753,3 +753,28 @@ func TestTheListCarriesTheNodeIdTheWatcherNeeds(t *testing.T) {
 		assert.NotEmpty(t, pr.NodeID, pr.Key().String())
 	}
 }
+
+func TestAddCommentRunsGhPrComment(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{[]byte("")}}
+	client := gh.New(runner, 1)
+
+	key := model.Key{Repo: "relloyd/prutil", Number: 42}
+	err := client.AddComment(context.Background(), key, "/gemini review")
+	require.NoError(t, err)
+
+	require.Equal(t, 1, runner.callCount())
+	assert.Equal(t, "pr comment 42 --repo relloyd/prutil --body /gemini review", runner.argsOf(0))
+}
+
+func TestAddCommentValidatesArguments(t *testing.T) {
+	client := gh.New(&fakeRunner{}, 1)
+
+	err := client.AddComment(context.Background(), model.Key{Repo: "", Number: 42}, "/gemini review")
+	assert.Error(t, err)
+
+	err = client.AddComment(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 0}, "/gemini review")
+	assert.Error(t, err)
+
+	err = client.AddComment(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 42}, "   ")
+	assert.Error(t, err)
+}

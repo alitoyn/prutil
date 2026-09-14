@@ -38,18 +38,30 @@ Failed checks:
 {{range .Checks}}- {{.Name}}{{if .Workflow}} ({{.Workflow}}){{end}}: {{.Description}} {{.URL}}
 {{end}}`
 
+// DefaultReviewComment is what prutil posts to a pull request to trigger an AI
+// review when the configuration does not override it.
+const DefaultReviewComment = "/gemini review"
+
 // Config is everything the application directory can be asked to remember
 // about how prutil should behave. Every field is optional: an absent file, an
 // empty file and a file setting one key all produce a working configuration.
 type Config struct {
-	Herdr HerdrConfig `yaml:"herdr"`
-	Watch WatchConfig `yaml:"watch"`
+	Herdr  HerdrConfig  `yaml:"herdr"`
+	Watch  WatchConfig  `yaml:"watch"`
+	Review ReviewConfig `yaml:"review"`
 	// Repos maps a repository in owner/name form to the local checkout path
 	// prutil should use for it.
 	Repos map[string]string `yaml:"repos"`
 	// Discovery configures how prutil discovers repository checkouts when a
 	// repository is not listed in Repos.
 	Discovery DiscoveryConfig `yaml:"discovery"`
+}
+
+// ReviewConfig governs triggering an automated AI review on a pull request.
+type ReviewConfig struct {
+	// Comment is the comment text posted to a pull request to trigger an AI
+	// review. Defaults to "/gemini review".
+	Comment string `yaml:"comment"`
 }
 
 // DiscoveryConfig controls checkout discovery on disk.
@@ -157,6 +169,9 @@ func DefaultConfig() Config {
 			ForcePreciseEvery:   5,
 			SelfTestMarker:      defaultMarker(),
 		},
+		Review: ReviewConfig{
+			Comment: DefaultReviewComment,
+		},
 		Repos: map[string]string{},
 		Discovery: DiscoveryConfig{
 			Roots: []string{},
@@ -192,6 +207,9 @@ func (c *Config) clamp() {
 	}
 	if c.Herdr.WaitForIdle < 0 {
 		c.Herdr.WaitForIdle = 0
+	}
+	if strings.TrimSpace(c.Review.Comment) == "" {
+		c.Review.Comment = DefaultReviewComment
 	}
 
 	w := &c.Watch

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -402,6 +403,48 @@ func (a *App) notifyNewFeedback() tea.Cmd {
 	)
 }
 
+// triggerAIReview posts the configured review trigger comment to the selected
+// open pull request.
+func (a *App) triggerAIReview() tea.Cmd {
+	if a.active != viewOpen {
+		return status("AI review is available only for open pull requests")
+	}
+	pr, ok := a.selectedPR()
+	if !ok {
+		return nil
+	}
+	key := pr.Key()
+	if a.runtimeOf(key).triggeringReview {
+		return status("already triggering AI review for " + key.String())
+	}
+
+	a.mutate(key).triggeringReview = true
+	comment := a.homeCfg.Review.Comment
+	if strings.TrimSpace(comment) == "" {
+		comment = home.DefaultReviewComment
+	}
+
+	a.setWatchOperation(key, "triggering AI review")
+	a.recordWatchActivity(key, "triggering AI review ("+comment+")")
+	return tea.Batch(
+		a.sendAIReviewComment(key, comment),
+		a.spin.Tick,
+		status(fmt.Sprintf("triggering AI review on %s…", key)),
+	)
+}
+
+// sendAIReviewComment issues the comment request asynchronously via the GitHub client.
+func (a *App) sendAIReviewComment(key model.Key, comment string) tea.Cmd {
+	client := a.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+
+		err := client.AddComment(ctx, key, comment)
+		return triggerReviewMsg{key: key, comment: comment, err: err}
+	}
+}
+
 // prByKey finds a pull request in the open list.
 func (a *App) prByKey(key model.Key) (model.PullRequest, bool) {
 	for _, pr := range a.views[viewOpen].prs {
@@ -735,5 +778,12 @@ type handoffMsg struct {
 	// nothing means there was no open feedback to send, so no agent was asked.
 	nothing bool
 	result  handoff.Result
+	err     error
+}
+
+// triggerReviewMsg reports the outcome of posting a review trigger comment.
+type triggerReviewMsg struct {
+	key     model.Key
+	comment string
 	err     error
 }

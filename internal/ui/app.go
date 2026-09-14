@@ -262,10 +262,11 @@ type App struct {
 // written from six places and cleaned up from four, and two of the defects
 // this code has already had were a cleanup that reached five of them.
 type prRuntime struct {
-	// handing and reviewing name work in flight, which is what stops a held
-	// key sending the same work twice.
-	handing   bool
-	reviewing bool
+	// handing, reviewing and triggeringReview name work in flight, which is
+	// what stops a held key sending the same work twice.
+	handing          bool
+	reviewing        bool
+	triggeringReview bool
 	// operation says what that work is, in words, for the detail pane.
 	operation string
 	// feedback is the last known count of review threads still waiting on the
@@ -311,7 +312,7 @@ func (a *App) mutate(key model.Key) *prRuntime {
 // anyInFlight reports whether any pull request has watcher work outstanding.
 func (a *App) anyInFlight() bool {
 	for _, got := range a.runtime {
-		if got.handing || got.reviewing {
+		if got.handing || got.reviewing || got.triggeringReview {
 			return true
 		}
 	}
@@ -565,6 +566,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.clampScroll()
 		return a, nil
 
+	case triggerReviewMsg:
+		a.mutate(msg.key).triggeringReview = false
+		a.setWatchOperation(msg.key, "")
+		if msg.err != nil {
+			a.recordWatchActivity(msg.key, "could not trigger AI review: "+msg.err.Error())
+			return a, status(fmt.Sprintf("could not trigger AI review on %s: %s", msg.key, msg.err.Error()))
+		}
+		a.recordWatchActivity(msg.key, fmt.Sprintf("triggered AI review (%s)", msg.comment))
+		return a, status(fmt.Sprintf("triggered AI review on %s (%s)", msg.key, msg.comment))
+
 	case statusMsg:
 		a.status = string(msg)
 		return a, tea.Tick(statusLifetime, func(time.Time) tea.Msg { return clearStatusMsg{} })
@@ -605,6 +616,9 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, a.keys.CheckHandoff):
 		return a, a.checkHandoff(true, false)
+
+	case key.Matches(msg, a.keys.TriggerReview):
+		return a, a.triggerAIReview()
 
 	case key.Matches(msg, a.keys.Notify):
 		return a, a.notifyNewFeedback()
@@ -1174,7 +1188,7 @@ func (a *App) onlyHandoffOutstanding() bool {
 	}
 	handing := false
 	for _, got := range a.runtime {
-		if got.reviewing {
+		if got.reviewing || got.triggeringReview {
 			return false
 		}
 		handing = handing || got.handing
