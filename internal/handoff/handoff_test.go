@@ -339,6 +339,7 @@ func TestAnAgentOnTheWrongBranchIsStillUsedAndToldSo(t *testing.T) {
 
 	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
 		cfg.Herdr.Skill = ""
+		cfg.Herdr.Fallback = home.FallbackRepo
 	})
 	res, err := dispatcher.Dispatch(context.Background(), request())
 
@@ -557,4 +558,105 @@ func TestTheToastStillFiresWhenTheHandoffsOwnContextHasRunOut(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, control.toasts, 1,
 		"a toast is what the reader gets when the handoff did not happen, so it cannot share its fate")
+}
+
+func TestFuzzyBranchMatchingSelectsAgentWithPrefixDifference(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
+	}}
+	// PR has head branch "feat/uploader-retry", local workspace has "uploader-retry" without prefix.
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "uploader-retry"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.BranchMatch = home.BranchMatchFuzzy
+	})
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Equal(t, []string{"w2:p1"}, control.prompted)
+	// No warning note should be added because fuzzy matching matched the branches.
+	assert.NotContains(t, control.texts[0], "Switch to the right branch")
+}
+
+func TestStrictBranchMatchingRejectsAgentWithPrefixDifference(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
+	}}
+	// PR has head branch "feat/uploader-retry", local workspace has "uploader-retry".
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "uploader-retry"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.BranchMatch = home.BranchMatchStrict
+		cfg.Herdr.Fallback = home.FallbackNone
+	})
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.ErrorIs(t, err, handoff.ErrNoAgent)
+	assert.Equal(t, home.OutcomeNoAgent, res.Outcome)
+	assert.Empty(t, control.prompted)
+}
+
+func TestFallbackNoneRejectsAgentOnDifferentBranch(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"},
+	}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackNone
+	})
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.ErrorIs(t, err, handoff.ErrNoAgent)
+	assert.Equal(t, home.OutcomeNoAgent, res.Outcome)
+	assert.Empty(t, control.prompted)
+}
+
+func TestFallbackNewAutomaticallyProvisionsWhenConfigured(t *testing.T) {
+	control := &fakeHerdr{
+		create: herdr.WorktreeSession{WorkspaceID: "w9", TabID: "w9:t1", RootPaneID: "w9:p1"},
+		start:  herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/prutil", PaneID: "w9:p1", Name: "pr-relloyd-prutil-42"},
+	}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	fetch := &fakeFetcher{}
+	dispatcher, _ := dispatcherWithProvision(t, control, fakeGit{}, repos, fetch, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+		cfg.Herdr.Fallback = home.FallbackNew
+	})
+	req := request()
+	// AllowProvision is false (simulating an automated watch tick), but FallbackNew is enabled!
+	req.AllowProvision = false
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.True(t, res.Provisioned)
+	assert.Equal(t, "w9", res.Workspace)
+	assert.Equal(t, []string{"w9:p1"}, control.prompted)
+}
+
+func TestFailedCheckHandoffRendersBranchMismatchNote(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"},
+	}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackRepo
+	})
+	req := request()
+	req.CheckHandoff = true
+	req.HeadOID = "abc123"
+	req.Checks = []model.Check{
+		{Name: "linux", Workflow: "CI", URL: "https://example.test/linux", Description: "failed"},
+	}
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Contains(t, control.texts[0], "Investigate the failed checks")
+	assert.Contains(t, control.texts[0], "is on main, not this pull request's feat/uploader-retry")
 }

@@ -153,7 +153,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) 
 
 	agent, note, found := d.pick(ctx, agents, req.PR)
 	if !found {
-		if req.AllowProvision {
+		if req.AllowProvision || (d.cfg.Fallback == home.FallbackNew && d.canProvision()) {
 			return d.provision(ctx, agents, req)
 		}
 		res := Result{Outcome: home.OutcomeNoAgent, Detail: ErrNoAgent.Error()}
@@ -249,6 +249,10 @@ func (d *Dispatcher) fail(ctx context.Context, req Request, res Result, err erro
 // holding the handoff open for its full work duration.
 const startAgentTimeout = time.Minute
 
+func (d *Dispatcher) canProvision() bool {
+	return strings.TrimSpace(d.cfg.AgentKind) != "" && d.repos != nil && d.fetch != nil
+}
+
 // provision creates or reopens a herdr worktree only for a reader-initiated
 // handoff that had no existing agent candidate.
 func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Request) (Result, error) {
@@ -256,7 +260,7 @@ func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Re
 		return d.fail(ctx, req, Result{}, ErrAgentKindRequired)
 	}
 	if d.repos == nil || d.fetch == nil {
-		return d.fail(ctx, req, Result{}, errors.New("manual workspace provisioning is not configured"))
+		return d.fail(ctx, req, Result{}, errors.New("workspace provisioning is not configured"))
 	}
 
 	checkout, err := d.repos.Resolve(ctx, req.PR.Repo)
@@ -422,6 +426,79 @@ func agentStem(repo string) string {
 	return stem
 }
 
+// commonBranchPrefixes are standard conventional prefixes stripped during fuzzy matching.
+var commonBranchPrefixes = []string{
+	"feature/", "feature-",
+	"feat/", "feat-",
+	"fix/", "fix-",
+	"bugfix/", "bugfix-",
+	"hotfix/", "hotfix-",
+	"chore/", "chore-",
+	"refactor/", "refactor-",
+	"docs/", "docs-",
+	"test/", "test-",
+	"ci/", "ci-",
+	"build/", "build-",
+	"perf/", "perf-",
+	"style/", "style-",
+}
+
+// normalizeBranch strips leading author scopes and standard type prefixes.
+func normalizeBranch(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	// Strip author scope if present, e.g. "ali.toyn/feat-something" -> "feat-something"
+	// Only if the prefix before '/' is not a common type prefix.
+	if idx := strings.Index(name, "/"); idx != -1 && idx < len(name)-1 {
+		isType := false
+		lowerName := strings.ToLower(name)
+		for _, p := range commonBranchPrefixes {
+			if strings.HasPrefix(lowerName, p) {
+				isType = true
+				break
+			}
+		}
+		if !isType {
+			name = name[idx+1:]
+		}
+	}
+
+	lower := strings.ToLower(name)
+	for _, p := range commonBranchPrefixes {
+		if strings.HasPrefix(lower, p) {
+			name = name[len(p):]
+			break
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// fuzzyBranchMatch reports whether two branch names are equivalent under fuzzy normalization.
+func fuzzyBranchMatch(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	normA := normalizeBranch(a)
+	normB := normalizeBranch(b)
+	if normA != "" && normB != "" && normA == normB {
+		return true
+	}
+	if normA != "" && normB != "" {
+		if strings.HasSuffix(normA, "-"+normB) || strings.HasSuffix(normA, "/"+normB) {
+			return true
+		}
+		if strings.HasSuffix(normB, "-"+normA) || strings.HasSuffix(normB, "/"+normA) {
+			return true
+		}
+	}
+	return false
+}
+
 // pick chooses the agent to hand the work to, and returns any warning the
 // prompt should carry about the checkout it found.
 func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.PullRequest) (herdr.Agent, string, bool) {
@@ -429,6 +506,15 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 		agent  herdr.Agent
 		branch string
 		score  int
+	}
+
+	branchMatch := d.cfg.BranchMatch
+	if branchMatch == "" {
+		branchMatch = home.BranchMatchFuzzy
+	}
+	fallback := d.cfg.Fallback
+	if fallback == "" {
+		fallback = home.FallbackNew
 	}
 
 	var found []candidate
@@ -444,13 +530,24 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 			continue
 		}
 
+		exact := checkout.Branch == pr.HeadRef
+		fuzzy := branchMatch == home.BranchMatchFuzzy && fuzzyBranchMatch(checkout.Branch, pr.HeadRef)
+
 		// The right branch is worth more than the right repository, and an
 		// agent ready for input is worth more than one part way through
 		// something else.
-		score := 1
-		if checkout.Branch == pr.HeadRef {
+		score := 0
+		switch {
+		case exact:
+			score = 5
+		case fuzzy:
 			score = 3
+		case fallback == home.FallbackRepo:
+			score = 1
+		default:
+			continue
 		}
+
 		if agent.Settled() {
 			score++
 		}
@@ -471,7 +568,7 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 
 	best := found[0]
 	note := ""
-	if best.branch != pr.HeadRef {
+	if best.branch != pr.HeadRef && (branchMatch != home.BranchMatchFuzzy || !fuzzyBranchMatch(best.branch, pr.HeadRef)) {
 		note = fmt.Sprintf(
 			"The checkout in %s is on %s, not this pull request's %s. Switch to the right branch before changing anything.",
 			short(best.agent.Dir()), branchLabel(best.branch), pr.HeadRef)

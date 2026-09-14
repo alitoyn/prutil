@@ -36,7 +36,9 @@ Before retrying a check without making changes, verify whether you have already 
 
 Failed checks:
 {{range .Checks}}- {{.Name}}{{if .Workflow}} ({{.Workflow}}){{end}}: {{.Description}} {{.URL}}
-{{end}}`
+{{end}}{{if .Note}}
+
+{{.Note}}{{end}}`
 
 // DefaultReviewComment is what prutil posts to a pull request to trigger an AI
 // review when the configuration does not override it.
@@ -100,6 +102,12 @@ type HerdrConfig struct {
 	// AgentKind restricts handoffs to one kind of agent, such as "claude" or
 	// "copilot". Empty means any agent herdr recognises will do.
 	AgentKind string `yaml:"agent_kind"`
+	// BranchMatch governs how closely an agent's git branch must match the
+	// pull request's head branch ("strict" or "fuzzy").
+	BranchMatch BranchMatchStrategy `yaml:"branch_match"`
+	// Fallback governs the action taken when no active agent matches the
+	// pull request's head branch ("new", "none", or "repo").
+	Fallback FallbackStrategy `yaml:"fallback"`
 	// Skill names the triage skill the default prompt invokes.
 	Skill string `yaml:"skill"`
 	// Prompt is a text/template rendered with PromptData.
@@ -177,6 +185,8 @@ func (w WatchConfig) Marker() string {
 func DefaultConfig() Config {
 	return Config{
 		Herdr: HerdrConfig{
+			BranchMatch: BranchMatchFuzzy,
+			Fallback:    FallbackNew,
 			Prompt:      DefaultPrompt,
 			CheckPrompt: DefaultCheckPrompt,
 			WaitForIdle: Duration(15 * time.Minute),
@@ -224,6 +234,12 @@ const minPollInterval = 15 * time.Second
 // clamp brings a configuration back inside the range prutil is willing to act
 // on, rather than rejecting a file over a value it can simply correct.
 func (c *Config) clamp() {
+	if c.Herdr.BranchMatch == "" {
+		c.Herdr.BranchMatch = BranchMatchFuzzy
+	}
+	if c.Herdr.Fallback == "" {
+		c.Herdr.Fallback = FallbackNew
+	}
 	if strings.TrimSpace(c.Herdr.Prompt) == "" {
 		c.Herdr.Prompt = DefaultPrompt
 	}
@@ -356,3 +372,76 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 // MarshalYAML implements yaml.Marshaler, so that a configuration prutil writes
 // back reads the same way it went in.
 func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
+
+// BranchMatchStrategy governs how an agent's local branch is matched against
+// the pull request's head branch.
+type BranchMatchStrategy string
+
+const (
+	// BranchMatchStrict requires an exact branch name match.
+	BranchMatchStrict BranchMatchStrategy = "strict"
+	// BranchMatchFuzzy matches branch names while tolerating standard type
+	// prefixes (such as feat-, fix/) or author scopes.
+	BranchMatchFuzzy BranchMatchStrategy = "fuzzy"
+)
+
+// String implements fmt.Stringer.
+func (b BranchMatchStrategy) String() string { return string(b) }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (b *BranchMatchStrategy) UnmarshalYAML(node *yaml.Node) error {
+	var text string
+	if err := node.Decode(&text); err != nil {
+		return fmt.Errorf("%s is not a valid branch matching strategy", node.Value)
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "strict", "exact":
+		*b = BranchMatchStrict
+	case "fuzzy", "lenient", "":
+		*b = BranchMatchFuzzy
+	default:
+		return fmt.Errorf("%q is not a branch matching strategy; use \"strict\" or \"fuzzy\"", text)
+	}
+	return nil
+}
+
+// MarshalYAML implements yaml.Marshaler.
+func (b BranchMatchStrategy) MarshalYAML() (any, error) { return string(b), nil }
+
+// FallbackStrategy governs the action taken when no active agent matches the
+// pull request's head branch.
+type FallbackStrategy string
+
+const (
+	// FallbackNew provisions a new worktree and launches an agent for the PR.
+	FallbackNew FallbackStrategy = "new"
+	// FallbackNone reports that no matching agent was found and takes no further action.
+	FallbackNone FallbackStrategy = "none"
+	// FallbackRepo falls back to any available agent in the same repository.
+	FallbackRepo FallbackStrategy = "repo"
+)
+
+// String implements fmt.Stringer.
+func (f FallbackStrategy) String() string { return string(f) }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (f *FallbackStrategy) UnmarshalYAML(node *yaml.Node) error {
+	var text string
+	if err := node.Decode(&text); err != nil {
+		return fmt.Errorf("%s is not a valid fallback strategy", node.Value)
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "new", "provision", "create", "":
+		*f = FallbackNew
+	case "none", "strict", "never":
+		*f = FallbackNone
+	case "repo", "repository":
+		*f = FallbackRepo
+	default:
+		return fmt.Errorf("%q is not a fallback strategy; use \"new\", \"none\" or \"repo\"", text)
+	}
+	return nil
+}
+
+// MarshalYAML implements yaml.Marshaler.
+func (f FallbackStrategy) MarshalYAML() (any, error) { return string(f), nil }

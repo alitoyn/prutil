@@ -28,7 +28,11 @@ func DefaultConfigTemplate() []byte {
 	}
 	_, _ = fmt.Fprintf(&out, "  wait_for_idle: %s\n", cfg.Herdr.WaitForIdle)
 	_, _ = fmt.Fprintf(&out, "  dry_run: %t\n", cfg.Herdr.DryRun)
-	_, _ = fmt.Fprintf(&out, "  toast: %t\n\n", cfg.Herdr.Toast)
+	_, _ = fmt.Fprintf(&out, "  toast: %t\n", cfg.Herdr.Toast)
+	out.WriteString("  # How to match candidate agents by branch: \"strict\" or \"fuzzy\".\n")
+	_, _ = fmt.Fprintf(&out, "  branch_match: %s\n", cfg.Herdr.BranchMatch)
+	out.WriteString("  # Action when no matching agent is found: \"new\" (provision), \"none\" (stop), or \"repo\" (any agent in repo).\n")
+	_, _ = fmt.Fprintf(&out, "  fallback: %s\n\n", cfg.Herdr.Fallback)
 	out.WriteString("  # Separate prompt template for failed-check investigations. It receives Repo, Number, URL,\n")
 	out.WriteString("  # Title, HeadRef, BaseRef, Checks and Note.\n")
 	out.WriteString("  check_prompt: |-\n")

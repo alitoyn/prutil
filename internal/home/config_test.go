@@ -89,3 +89,61 @@ func TestTheWrittenTemplateNamesReviewComment(t *testing.T) {
 	assert.Contains(t, tmpl, "review:")
 	assert.Contains(t, tmpl, "comment: \"/gemini review\"")
 }
+
+func TestBranchMatchAndFallbackDefaults(t *testing.T) {
+	cfg := home.DefaultConfig()
+	assert.Equal(t, home.BranchMatchFuzzy, cfg.Herdr.BranchMatch)
+	assert.Equal(t, home.FallbackNew, cfg.Herdr.Fallback)
+}
+
+func TestBranchMatchCanBeConfigured(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected home.BranchMatchStrategy
+	}{
+		{"herdr:\n  branch_match: strict\n", home.BranchMatchStrict},
+		{"herdr:\n  branch_match: exact\n", home.BranchMatchStrict},
+		{"herdr:\n  branch_match: fuzzy\n", home.BranchMatchFuzzy},
+		{"herdr:\n  branch_match: lenient\n", home.BranchMatchFuzzy},
+	}
+	for _, tc := range cases {
+		cfg, err := home.ParseConfig([]byte(tc.input))
+		require.NoError(t, err)
+		assert.Equal(t, tc.expected, cfg.Herdr.BranchMatch)
+	}
+}
+
+func TestFallbackStrategyCanBeConfigured(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected home.FallbackStrategy
+	}{
+		{"herdr:\n  fallback: new\n", home.FallbackNew},
+		{"herdr:\n  fallback: provision\n", home.FallbackNew},
+		{"herdr:\n  fallback: none\n", home.FallbackNone},
+		{"herdr:\n  fallback: strict\n", home.FallbackNone},
+		{"herdr:\n  fallback: repo\n", home.FallbackRepo},
+		{"herdr:\n  fallback: repository\n", home.FallbackRepo},
+	}
+	for _, tc := range cases {
+		cfg, err := home.ParseConfig([]byte(tc.input))
+		require.NoError(t, err)
+		assert.Equal(t, tc.expected, cfg.Herdr.Fallback)
+	}
+}
+
+func TestInvalidBranchMatchOrFallbackReturnsError(t *testing.T) {
+	_, err := home.ParseConfig([]byte("herdr:\n  branch_match: invalid\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "branch matching strategy")
+
+	_, err = home.ParseConfig([]byte("herdr:\n  fallback: invalid\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fallback strategy")
+}
+
+func TestTheWrittenTemplateNamesBranchMatchAndFallback(t *testing.T) {
+	tmpl := string(home.DefaultConfigTemplate())
+	assert.Contains(t, tmpl, "branch_match: fuzzy")
+	assert.Contains(t, tmpl, "fallback: new")
+}
