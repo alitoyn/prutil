@@ -8,6 +8,37 @@ state, its age, repository, branches, number, review state and diff size. The
 pane on the right shows the selected pull request's WATCH summary and
 individual GitHub Actions checks.
 
+## Self-healing pull requests
+
+prutil can turn a pull request into a lightweight feedback loop instead of a
+static page you have to keep checking. Watch a pull request and it polls for
+new review feedback and failed checks, deduplicates work it has already handed
+off, and routes actionable work to the matching coding-agent workspace through
+[herdr](https://herdr.dev). The agent triages the feedback, separates real
+issues from noise (including automated review noise), makes a focused fix,
+pushes a follow-up commit, and lets GitHub run the checks again.
+
+The loop is deliberately human-in-the-loop: prutil observes and coordinates;
+the agent proposes changes through normal commits and pull-request feedback,
+while people retain control of review, merge, retries and ambiguous decisions.
+
+```mermaid
+sequenceDiagram
+    participant GitHub
+    participant prutil
+    participant Herdr
+    participant Agent as Coding agent
+
+    GitHub-->>prutil: New review feedback or failed checks
+    prutil->>GitHub: Poll and identify actionable changes
+    prutil->>Herdr: Route feedback to the matching repository and branch
+    Herdr->>Agent: Start or notify the appropriate workspace
+    Agent->>Agent: Triage feedback and decide what to fix
+    Agent->>GitHub: Push a focused follow-up commit
+    GitHub-->>prutil: Re-run checks and expose new feedback
+    prutil-->>Herdr: Continue the loop when more action is needed
+```
+
 ## Requirements
 
 - Go 1.26 or newer, if you are building from source.
