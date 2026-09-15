@@ -128,15 +128,42 @@ func TestTheDefaultCheckPromptExplainsHowToTriageAndRetryFailures(t *testing.T) 
 }
 
 func TestAPromptNoteIsAppendedSoTheAgentKnowsAboutTheWrongBranch(t *testing.T) {
-	cfg := home.DefaultConfig()
-	cfg.Herdr.Skill = "pr-triage"
+	for _, tc := range []struct {
+		name  string
+		skill string
+	}{
+		{name: "a prompt that invokes a skill", skill: "pr-triage"},
+		{name: "a prompt that spells the job out", skill: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := home.DefaultConfig()
+			cfg.Herdr.Skill = tc.skill
 
-	text, err := cfg.Herdr.RenderPrompt(home.PromptData{
-		URL:  "https://example.test/pull/1",
-		Note: "The checkout is on main.",
+			text, err := cfg.Herdr.RenderPrompt(home.PromptData{
+				URL:  "https://example.test/pull/1",
+				Note: "The checkout is on main.",
+			})
+			require.NoError(t, err)
+			// The note is a paragraph of its own. Indented after a blank line
+			// it would be a Markdown code block, which an agent reads as a
+			// quotation rather than as something it has been told.
+			assert.True(t, strings.HasSuffix(text, "\n\nThe checkout is on main."), "%q", text)
+			assert.NotContains(t, text, "\t", "nothing in the prompt is indented")
+		})
+	}
+}
+
+func TestTheDefaultCheckPromptCarriesTheNoteAfterTheFailures(t *testing.T) {
+	cfg := home.DefaultConfig()
+
+	text, err := cfg.Herdr.RenderCheckPrompt(home.PromptData{
+		URL:    "https://example.test/pull/1",
+		Checks: []model.Check{{Name: "linux", Description: "failed"}},
+		Note:   "The checkout is behind.",
 	})
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(text, "The checkout is on main."), text)
+	assert.Contains(t, text, "linux: failed")
+	assert.True(t, strings.HasSuffix(text, "\n\nThe checkout is behind."), text)
 }
 
 func TestAPromptTemplateThatDoesNotParseIsReported(t *testing.T) {

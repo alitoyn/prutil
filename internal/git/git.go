@@ -38,6 +38,13 @@ type Checkout struct {
 	Repo string
 	// Branch is what is checked out there, empty when the head is detached.
 	Branch string
+	// Head is the commit checked out there, empty when git could not say.
+	Head string
+	// Upstream is the ref the branch pulls from on its remote, such as
+	// refs/heads/feat/uploader-retry, or refs/pull/42/head for a branch made
+	// from a pull request's own ref. It is empty for a detached head and for a
+	// branch that tracks nothing.
+	Upstream string
 }
 
 // Client reads repository state, caching what it learns for a short while.
@@ -68,8 +75,8 @@ func NewExec() (*Client, error) {
 	return New(cmd), nil
 }
 
-// Identify reports the repository and branch checked out in dir. A directory
-// that is not a working tree yields a zero Checkout rather than an error,
+// Identify reports the repository, branch and commit checked out in dir. A
+// directory that is not a working tree yields a zero Checkout rather than an error,
 // because "this agent is not in a repository" is an ordinary answer.
 func (c *Client) Identify(ctx context.Context, dir string) Checkout {
 	if dir == "" {
@@ -107,8 +114,8 @@ func (c *Client) cached(dir string) (Checkout, bool) {
 	return Checkout{}, false
 }
 
-// identify does the three reads without the cache in the way. A directory git
-// will not treat as a working tree is not an error: an agent sitting in one is
+// identify does the reads without the cache in the way. A directory git will
+// not treat as a working tree is not an error: an agent sitting in one is
 // simply not a candidate for any pull request.
 func (c *Client) identify(ctx context.Context, dir string) Checkout {
 	root, ok := c.read(ctx, dir, "rev-parse", "--show-toplevel")
@@ -117,11 +124,45 @@ func (c *Client) identify(ctx context.Context, dir string) Checkout {
 	}
 
 	// A detached head reports an empty branch and exit status zero, and a
-	// checkout with no origin is ordinary enough to pass over in silence.
+	// checkout with no origin, no commits yet or a branch that tracks nothing
+	// is ordinary enough to pass over in silence.
 	branch, _ := c.read(ctx, dir, "branch", "--show-current")
 	remote, _ := c.read(ctx, dir, "remote", "get-url", "origin")
+	head, _ := c.read(ctx, dir, "rev-parse", "HEAD")
+	upstream := ""
+	if branch != "" {
+		upstream, _ = c.read(ctx, dir, "config", "--get", "branch."+branch+".merge")
+	}
 
-	return Checkout{Root: root, Repo: ParseRemote(remote), Branch: branch}
+	return Checkout{Root: root, Repo: ParseRemote(remote), Branch: branch, Head: head, Upstream: upstream}
+}
+
+// Contains reports whether the commit checked out in dir has commit in its
+// history: it is that commit, or has commits of its own on top. It is how
+// prutil tells a checkout holding a pull request's work from one that merely
+// has a similar branch name. A commit the checkout has never fetched is not
+// contained, which is the honest answer. The result is not cached, because the
+// question changes with the pull request.
+func (c *Client) Contains(ctx context.Context, dir, commit string) bool {
+	if dir == "" || !isCommitID(commit) {
+		return false
+	}
+	_, ok := c.read(ctx, dir, "merge-base", "--is-ancestor", commit, "HEAD")
+	return ok
+}
+
+// isCommitID reports whether s is a commit hash, which is all Contains will
+// put on git's command line in a position an option could otherwise take.
+func isCommitID(s string) bool {
+	if len(s) < 4 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // read runs one git command inside dir and returns its trimmed output,

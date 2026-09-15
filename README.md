@@ -192,12 +192,21 @@ or agent, so it is useful for confirming the normal no-agent and herdr
 notification behavior without waiting for the watcher to spot a change.
 
 prutil picks the agent rather than asking you to. It lists the agents herdr
-knows about, reads the repository and branch out of each one's working
-directory, and prefers the one sitting on the pull request's head branch. An
-agent one branch away is used too, and told so in the prompt. The terminal
-prutil is itself running in is never given work. If the agent is busy prutil
-waits for it to finish, up to fifteen minutes, and if it is stuck at a prompt of
-its own nothing is sent at all.
+knows about and asks git what each one's working directory is working on. An
+agent qualifies when prutil set its workspace up for the pull request, when its
+branch tracks the pull request's head branch or has the same name, or when its
+checkout holds the pull request's latest commit. Branch names are never compared
+for a likeness: `fix/retry` and `feat/retry` are different work, and so are
+`main` and `chore/sync-main`. When more than one agent qualifies, the stronger
+evidence wins, then the one ready for input. The prompt carries a warning only
+when there is something true to say: the checkout is behind the pull request, or
+holds its commits on a branch that will not reach it.
+
+When no agent qualifies nothing is sent, and the herdr notification and
+`handoffs.jsonl` name the agents prutil passed over, so an agent busy with other
+work is never interrupted. The terminal prutil is itself running in is never
+given work. If the agent is busy prutil waits for it to finish, up to fifteen
+minutes, and if it is stuck at a prompt of its own nothing is sent at all.
 
 `W` is also the explicit consent to set up a workspace when no suitable agent
 exists. It resolves a local checkout, fetches the pull request's

@@ -647,7 +647,7 @@ func (a *App) handoffNote(msg handoffMsg) string {
 
 	switch {
 	case errors.Is(msg.err, handoff.ErrNoAgent):
-		return fmt.Sprintf("%s: %s, but no agent is checked out in %s", key, counts, msg.pr.Repo)
+		return fmt.Sprintf("%s: %s, but no agent in %s is working on it", key, counts, msg.pr.Repo)
 	case errors.Is(msg.err, handoff.ErrBlocked):
 		return fmt.Sprintf("%s: %s is waiting on a dialog of its own, so %s was not sent", key, target, key)
 	case errors.Is(msg.err, handoff.ErrStillWorking):

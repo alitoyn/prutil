@@ -282,7 +282,7 @@ func TestNoAgentIsExplainedRatherThanReportedAsAFailure(t *testing.T) {
 	handOver(t, app)
 
 	assert.Equal(t,
-		"relloyd/prutil#42: 2 of 2 open threads new, but no agent is checked out in relloyd/prutil",
+		"relloyd/prutil#42: 2 of 2 open threads new, but no agent in relloyd/prutil is working on it",
 		app.status)
 }
 

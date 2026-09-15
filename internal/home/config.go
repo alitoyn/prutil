@@ -24,7 +24,7 @@ It is {{.HeadRef}} into {{.BaseRef}}, with {{.UnresolvedCount}} unresolved revie
 	`changes that should be made, and reply on the threads you are leaving alone saying why.` +
 	`{{end}}{{if .Note}}
 
-	{{.Note}}{{end}}`
+{{.Note}}{{end}}`
 
 // DefaultCheckPrompt is what prutil says to an agent when a pull request's
 // checks have failed and no check-specific prompt is configured.
@@ -36,7 +36,8 @@ Before retrying a check without making changes, verify whether you have already 
 
 Failed checks:
 {{range .Checks}}- {{.Name}}{{if .Workflow}} ({{.Workflow}}){{end}}: {{.Description}} {{.URL}}
-{{end}}`
+{{end}}{{if .Note}}
+{{.Note}}{{end}}`
 
 // DefaultReviewComment is what prutil posts to a pull request to trigger an AI
 // review when the configuration does not override it.

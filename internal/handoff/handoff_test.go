@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,10 +118,25 @@ func (f *fakeHerdr) Notify(_ context.Context, title, body string) error {
 }
 
 // fakeGit answers for the directories a test set up, and reports every other
-// directory as no repository at all.
+// directory as no repository at all. A checkout's history holds its own head
+// commit and nothing older; historyGit adds the rest.
 type fakeGit map[string]git.Checkout
 
 func (f fakeGit) Identify(_ context.Context, dir string) git.Checkout { return f[dir] }
+
+func (f fakeGit) Contains(_ context.Context, dir, commit string) bool {
+	return commit != "" && f[dir].Head == commit
+}
+
+// historyGit is a fakeGit whose checkouts also hold older commits.
+type historyGit struct {
+	fakeGit
+	history map[string][]string
+}
+
+func (h historyGit) Contains(ctx context.Context, dir, commit string) bool {
+	return h.fakeGit.Contains(ctx, dir, commit) || slices.Contains(h.history[dir], commit)
+}
 
 type fakeResolver struct {
 	checkout git.Checkout
@@ -144,13 +161,13 @@ func (f *fakeFetcher) FetchPullRequest(_ context.Context, root string, number in
 
 // dispatcherFor builds a dispatcher whose waits cost nothing, and reports how
 // many times it waited.
-func dispatcherFor(t *testing.T, control *fakeHerdr, checkouts fakeGit, tune func(*home.Config)) (*handoff.Dispatcher, *int) {
+func dispatcherFor(t *testing.T, control *fakeHerdr, checkouts handoff.Identifier, tune func(*home.Config)) (*handoff.Dispatcher, *int) {
 	return dispatcherWithProvision(t, control, checkouts, nil, nil, tune)
 }
 
 // dispatcherWithProvision builds a dispatcher with optional local repository
 // seams for tests that exercise manual workspace provisioning.
-func dispatcherWithProvision(t *testing.T, control *fakeHerdr, checkouts fakeGit, repos handoff.RepositoryResolver, fetch git.PullRequestFetcher, tune func(*home.Config)) (*handoff.Dispatcher, *int) {
+func dispatcherWithProvision(t *testing.T, control *fakeHerdr, checkouts handoff.Identifier, repos handoff.RepositoryResolver, fetch git.PullRequestFetcher, tune func(*home.Config)) (*handoff.Dispatcher, *int) {
 	t.Helper()
 
 	cfg := home.DefaultConfig()
@@ -331,20 +348,21 @@ func TestAManualProvisioningReportsAFetchFailureWithoutCreatingAWorkspace(t *tes
 	assert.Empty(t, control.started)
 }
 
-func TestAnAgentOnTheWrongBranchIsStillUsedAndToldSo(t *testing.T) {
+func TestAnAgentOnOtherWorkIsPassedOverAndNamed(t *testing.T) {
 	control := &fakeHerdr{agents: []herdr.Agent{
 		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"},
 	}}
-	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main"}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
 
-	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
-		cfg.Herdr.Skill = ""
-	})
+	dispatcher, _ := dispatcherFor(t, control, checkouts, nil)
 	res, err := dispatcher.Dispatch(context.Background(), request())
 
-	require.NoError(t, err)
-	assert.Equal(t, home.OutcomeSent, res.Outcome)
-	assert.Contains(t, control.texts[0], "is on main, not this pull request's feat/uploader-retry")
+	require.ErrorIs(t, err, handoff.ErrNoAgent)
+	assert.Equal(t, home.OutcomeNoAgent, res.Outcome)
+	assert.Empty(t, control.prompted, "an agent busy with other work is never interrupted with this pull request")
+	assert.Contains(t, res.Detail, "claude w2:p1 on main", "the reader can see who was there and what they were on")
+	require.Len(t, control.toasts, 1)
+	assert.Contains(t, control.toasts[0], "claude w2:p1 on main")
 }
 
 func TestPrutilNeverHandsWorkToTheTerminalItIsRunningIn(t *testing.T) {
@@ -557,4 +575,225 @@ func TestTheToastStillFiresWhenTheHandoffsOwnContextHasRunOut(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, control.toasts, 1,
 		"a toast is what the reader gets when the handoff did not happen, so it cannot share its fate")
+}
+
+func TestAnAgentIsMatchedByWhatGitSaysItsCheckoutIsWorkingOn(t *testing.T) {
+	const head = "c0ffee1234"
+	tests := []struct {
+		name     string
+		headRef  string
+		checkout git.Checkout
+		history  []string
+		// note is a phrase the prompt must carry, or empty for no note at all.
+		note      string
+		wantAgent bool
+	}{
+		{
+			name:      "a renamed branch that tracks the pull request's head is matched without a note",
+			checkout:  git.Checkout{Branch: "uploader-retry", Upstream: "refs/heads/feat/uploader-retry", Head: head},
+			wantAgent: true,
+		},
+		{
+			name:      "a branch made from the pull request's own ref is matched without a note",
+			checkout:  git.Checkout{Branch: "pr-42", Upstream: "refs/pull/42/head", Head: head},
+			wantAgent: true,
+		},
+		{
+			name:      "the workspace prutil set up for the pull request is matched without a note",
+			checkout:  git.Checkout{Branch: "prutil/relloyd-prutil-42", Head: head},
+			wantAgent: true,
+		},
+		{
+			name:      "a renamed branch holding the head commit under local work is matched and told where its commits belong",
+			checkout:  git.Checkout{Branch: "uploader-retry", Head: "abcdef9999"},
+			history:   []string{head},
+			note:      "is not its branch, feat/uploader-retry",
+			wantAgent: true,
+		},
+		{
+			name:      "the pull request's branch without its latest commit is matched and told to pull",
+			checkout:  git.Checkout{Branch: "feat/uploader-retry", Upstream: "refs/heads/feat/uploader-retry", Head: "1111111"},
+			note:      "does not have this pull request's latest commit, c0ffee1",
+			wantAgent: true,
+		},
+		{
+			name:     "main is not matched just because the pull request's branch name ends in main",
+			headRef:  "chore/sync-main",
+			checkout: git.Checkout{Branch: "main", Upstream: "refs/heads/main", Head: "2222222"},
+		},
+		{
+			name:     "a teammate's branch with the same last word is not matched",
+			headRef:  "alice/retry",
+			checkout: git.Checkout{Branch: "bob/retry", Upstream: "refs/heads/bob/retry", Head: "3333333"},
+		},
+		{
+			name:     "a branch of another type with the same name is not matched",
+			headRef:  "fix/uploader-retry",
+			checkout: git.Checkout{Branch: "feat/uploader-retry", Upstream: "refs/heads/feat/uploader-retry", Head: "4444444"},
+		},
+		{
+			name:     "a branch stacked on the pull request that tracks its own remote branch is not matched",
+			checkout: git.Checkout{Branch: "feat/uploader-retry-2", Upstream: "refs/heads/feat/uploader-retry-2", Head: "5555555"},
+			history:  []string{head},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			control := &fakeHerdr{agents: []herdr.Agent{
+				{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/checkout", PaneID: "w2:p1"},
+			}}
+			checkout := tc.checkout
+			checkout.Repo = "relloyd/prutil"
+			checkouts := historyGit{
+				fakeGit: fakeGit{"/work/checkout": checkout},
+				history: map[string][]string{"/work/checkout": tc.history},
+			}
+			req := request()
+			req.PR.HeadOID = head
+			if tc.headRef != "" {
+				req.PR.HeadRef = tc.headRef
+			}
+
+			dispatcher, _ := dispatcherFor(t, control, checkouts, nil)
+			_, err := dispatcher.Dispatch(context.Background(), req)
+
+			if !tc.wantAgent {
+				require.ErrorIs(t, err, handoff.ErrNoAgent)
+				assert.Empty(t, control.prompted)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"w2:p1"}, control.prompted)
+			if tc.note == "" {
+				assert.NotContains(t, control.texts[0], "The checkout in")
+				return
+			}
+			assert.Equal(t, 1, strings.Count(control.texts[0], tc.note),
+				"the note appears once, whether the template placed it or it was appended")
+		})
+	}
+}
+
+func TestTheStrongestEvidenceWinsWhenTwoAgentsAreOnThePullRequest(t *testing.T) {
+	const head = "c0ffee1234"
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/stale", PaneID: "w2:p1"},
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/current", PaneID: "w3:p1"},
+	}}
+	checkouts := fakeGit{
+		"/work/stale":   {Repo: "relloyd/prutil", Branch: "feat/uploader-retry", Upstream: "refs/heads/feat/uploader-retry", Head: "1111111"},
+		"/work/current": {Repo: "relloyd/prutil", Branch: "uploader-retry", Upstream: "refs/heads/feat/uploader-retry", Head: head},
+	}
+	req := request()
+	req.PR.HeadOID = head
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, nil)
+	_, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"w3:p1"}, control.prompted,
+		"the checkout holding the latest commit beats the one that only has the branch name")
+}
+
+func TestAManualHandoffSetsUpAWorkspaceRatherThanBorrowingAnAgentOnOtherWork(t *testing.T) {
+	control := &fakeHerdr{
+		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"}},
+		create: herdr.WorktreeSession{WorkspaceID: "w8", TabID: "w8:t1", RootPaneID: "w8:p1"},
+		start:  herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w8:p1", Name: "pr-relloyd-prutil-42"},
+	}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	dispatcher, _ := dispatcherWithProvision(t, control, checkouts, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	req := request()
+	req.AllowProvision = true
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.True(t, res.Provisioned)
+	assert.Len(t, control.started, 1)
+	assert.Equal(t, []string{"w8:p1"}, control.prompted, "the agent on main is left to its own work")
+}
+
+func TestAManualHandoffReusesTheAgentItAlreadySetUpForThePullRequest(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/prutil-42", PaneID: "w8:p1", Name: "pr-relloyd-prutil-42"},
+	}}
+	checkouts := fakeGit{"/work/prutil-42": {Repo: "relloyd/prutil", Branch: "prutil/relloyd-prutil-42"}}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	fetch := &fakeFetcher{}
+	dispatcher, _ := dispatcherWithProvision(t, control, checkouts, repos, fetch, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	req := request()
+	req.AllowProvision = true
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.False(t, res.Provisioned)
+	assert.Empty(t, control.started, "a second W does not start a second agent")
+	assert.Empty(t, control.created)
+	assert.Empty(t, fetch.calls)
+	assert.Equal(t, []string{"w8:p1"}, control.prompted)
+	assert.NotContains(t, control.texts[0], "The checkout in")
+}
+
+func TestAWarningIndentedByASavedTemplateIsNotSentAsACodeBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name, prompt, want string
+	}{
+		{
+			name:   "a tab in front of the warning, as in prompts saved before it was removed, is dropped",
+			prompt: "/{{.Skill}} {{.URL}}{{if .Note}}\n\n\t{{.Note}}{{end}}",
+			want:   "/pr-triage https://github.com/relloyd/prutil/pull/42\n\nThe checkout in ",
+		},
+		{
+			name:   "spaces in front of the warning are dropped too",
+			prompt: "/{{.Skill}} {{.URL}}{{if .Note}}\n\n    {{.Note}}{{end}}",
+			want:   "/pr-triage https://github.com/relloyd/prutil/pull/42\n\nThe checkout in ",
+		},
+		{
+			name:   "a warning that follows other words on its line is left where the template put it",
+			prompt: "/{{.Skill}} {{.URL}}{{if .Note}}\n\nWarning:  {{.Note}}{{end}}",
+			want:   "\n\nWarning:  The checkout in ",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			control := &fakeHerdr{agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}}}
+			checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry", Head: "1111111"}}
+			dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+				cfg.Herdr.Prompt = tc.prompt
+			})
+			req := request()
+			req.PR.HeadOID = "c0ffee1234"
+
+			_, err := dispatcher.Dispatch(context.Background(), req)
+
+			require.NoError(t, err)
+			assert.Contains(t, control.texts[0], tc.want)
+		})
+	}
+}
+
+func TestAFailedCheckHandoffCarriesTheNoteEvenFromATemplateWithoutOne(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}}}
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry", Head: "1111111"}}
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		// The shape of a check prompt saved into a configuration file before
+		// prompts carried a note.
+		cfg.Herdr.CheckPrompt = "Investigate the failed checks on {{.URL}}"
+	})
+	req := request()
+	req.CheckHandoff = true
+	req.HeadOID = "c0ffee1234"
+
+	_, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Contains(t, control.texts[0], "Investigate the failed checks on https://github.com/relloyd/prutil/pull/42")
+	assert.Contains(t, control.texts[0], "Pull before changing anything.",
+		"the note is appended when the template has nowhere to put it")
 }

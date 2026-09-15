@@ -206,6 +206,17 @@ only reschedules what it has a reading for, so anything else stays due at a
 time already past and the schedule computes a zero delay, which is a request
 loop.
 
+`handoff.pick` matches an agent to a pull request on what git says about its
+checkout, never on how its branch name looks: prutil's own workspace branch,
+a branch that tracks or is named after the pull request's head, or a checkout
+holding the head commit (`git.Client.Contains`), which a branch stacked on the
+pull request only counts for when it tracks no remote branch of its own. Do not
+add prefix stripping or any other name normalisation; `fix/foo` and `feat/foo`,
+and `main` and `chore/sync-main`, are different work. With no match nothing is
+sent and the `ErrNoAgent` detail names the agents passed over. Only `W`
+(`Request.AllowProvision`) goes on to create a workspace; the watcher, `F` and
+`N` never do, and there is no repo-wide fallback to an agent on other work.
+
 `internal/ui` holds one `prRuntime` per pull request rather than a map per
 field. Six maps written from six places and cleaned up from four is how a
 cleanup comes to reach five of them. `a.checks` stays separate: it is fetched
