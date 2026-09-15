@@ -797,3 +797,158 @@ func TestAFailedCheckHandoffCarriesTheNoteEvenFromATemplateWithoutOne(t *testing
 	assert.Contains(t, control.texts[0], "Pull before changing anything.",
 		"the note is appended when the template has nowhere to put it")
 }
+
+func TestFallbackNoneRejectsAgentOnDifferentBranch(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"}}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackNone
+	})
+
+	_, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, handoff.ErrNoAgent)
+	assert.Empty(t, control.prompted)
+}
+
+func TestFallbackRepoUsesAgentInSameRepositoryWithWarning(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"}}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackRepo
+	})
+
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, "w2:p1", res.Target)
+	assert.Equal(t, []string{"w2:p1"}, control.prompted)
+	assert.Contains(t, control.texts[0], "The checkout in /work/main is on main, not this pull request's feat/uploader-retry. Switch to the right branch before changing anything.")
+}
+
+func TestFallbackNewAutomaticallyProvisionsWhenConfigured(t *testing.T) {
+	control := &fakeHerdr{
+		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"}},
+		create: herdr.WorktreeSession{WorkspaceID: "w8", TabID: "w8:t1", RootPaneID: "w8:p1"},
+		start:  herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w8:p1", Name: "pr-relloyd-prutil-42"},
+	}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	dispatcher, _ := dispatcherWithProvision(t, control, checkouts, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+		cfg.Herdr.Fallback = home.FallbackNew
+	})
+
+	req := request()
+	req.AllowProvision = false // automatic handoff / watch poll
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.True(t, res.Provisioned)
+	assert.Len(t, control.started, 1)
+	assert.Equal(t, []string{"w8:p1"}, control.prompted)
+}
+
+func TestProvisionPausesForStartupGraceBeforePrompting(t *testing.T) {
+	control := &fakeHerdr{
+		create: herdr.WorktreeSession{WorkspaceID: "w8", TabID: "w8:t1", RootPaneID: "w8:p1"},
+		start:  herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w8:p1", Name: "pr-relloyd-prutil-42"},
+	}
+	checkouts := fakeGit{}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	var sleepDurations []time.Duration
+	cfg := home.DefaultConfig()
+	cfg.Herdr.AgentKind = "claude"
+	cfg.Herdr.Skill = "pr-triage"
+	dispatcher := handoff.New(handoff.Options{
+		Herdr:    control,
+		Git:      checkouts,
+		Repos:    repos,
+		Fetch:    &fakeFetcher{},
+		Config:   cfg,
+		SelfPane: "w1:p3",
+		Sleep: func(ctx context.Context, d time.Duration) bool {
+			sleepDurations = append(sleepDurations, d)
+			return ctx.Err() == nil
+		},
+	})
+	req := request()
+	req.AllowProvision = true
+
+	res, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.True(t, res.Provisioned)
+	require.NotEmpty(t, sleepDurations)
+	assert.Equal(t, 2*time.Second, sleepDurations[0], "the first pause is the 2s startup grace")
+	assert.Equal(t, []string{"w8:p1"}, control.prompted)
+}
+
+func TestPromptAcceptanceVerifiedAndRetriedOnIdleWithBackoff(t *testing.T) {
+	var gets []herdr.Agent
+	for range 13 {
+		gets = append(gets, herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w3:p1"})
+	}
+	gets = append(gets, herdr.Agent{Kind: "claude", Status: herdr.StatusWorking, PaneID: "w3:p1"})
+
+	control := &fakeHerdr{
+		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}},
+		gets:   gets,
+	}
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"}}
+	var sleepDurations []time.Duration
+	cfg := home.DefaultConfig()
+	cfg.Herdr.Skill = "pr-triage"
+	dispatcher := handoff.New(handoff.Options{
+		Herdr:    control,
+		Git:      checkouts,
+		Config:   cfg,
+		SelfPane: "w1:p3",
+		Sleep: func(ctx context.Context, d time.Duration) bool {
+			sleepDurations = append(sleepDurations, d)
+			return ctx.Err() == nil
+		},
+	})
+
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Len(t, control.prompted, 2, "prompt was retried once")
+	assert.Contains(t, sleepDurations, 1*time.Second, "exponential backoff between prompt attempts")
+}
+
+func TestPromptFailureWhenAgentNeverAcceptsPrompt(t *testing.T) {
+	control := &fakeHerdr{
+		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}},
+		gets: []herdr.Agent{
+			{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w3:p1"},
+		},
+	}
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"}}
+	var sleepDurations []time.Duration
+	cfg := home.DefaultConfig()
+	cfg.Herdr.Skill = "pr-triage"
+	dispatcher := handoff.New(handoff.Options{
+		Herdr:    control,
+		Git:      checkouts,
+		Config:   cfg,
+		SelfPane: "w1:p3",
+		Sleep: func(ctx context.Context, d time.Duration) bool {
+			sleepDurations = append(sleepDurations, d)
+			return ctx.Err() == nil
+		},
+	})
+
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.ErrorIs(t, err, handoff.ErrPromptNotAccepted)
+	assert.Equal(t, home.OutcomeFailed, res.Outcome)
+	assert.Len(t, control.prompted, 3, "retried 3 times")
+	assert.Contains(t, sleepDurations, 1*time.Second)
+	assert.Contains(t, sleepDurations, 2*time.Second)
+}
+
+

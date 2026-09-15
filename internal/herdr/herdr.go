@@ -257,21 +257,26 @@ func (c *Client) OpenWorktree(ctx context.Context, root, path, branch, label str
 	if err != nil {
 		return WorktreeSession{}, err
 	}
-	path, err = requireText("worktree open", "path", path)
-	if err != nil {
-		return WorktreeSession{}, err
-	}
-	branch, err = requireText("worktree open", "branch", branch)
-	if err != nil {
-		return WorktreeSession{}, err
-	}
 	label, err = requireText("worktree open", "label", label)
 	if err != nil {
 		return WorktreeSession{}, err
 	}
+	path = strings.TrimSpace(path)
+	branch = strings.TrimSpace(branch)
+	if path == "" && branch == "" {
+		return WorktreeSession{}, errors.New("worktree open: path or branch is required")
+	}
+
+	args := []string{"worktree", "open", "--cwd", root}
+	if path != "" {
+		args = append(args, "--path", path)
+	} else {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, "--label", label, "--no-focus")
 
 	var result WorktreeSession
-	if err := c.call(ctx, &result, "worktree", "open", "--cwd", root, "--path", path, "--branch", branch, "--label", label, "--no-focus"); err != nil {
+	if err := c.call(ctx, &result, args...); err != nil {
 		return WorktreeSession{}, err
 	}
 	return result, nil

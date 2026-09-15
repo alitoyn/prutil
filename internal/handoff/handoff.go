@@ -38,9 +38,19 @@ var (
 	// ErrStillWorking means the target never settled inside the configured
 	// wait.
 	ErrStillWorking = errors.New("the agent is still working")
+	// ErrPromptNotAccepted means the target agent never entered a working or
+	// blocked state after prompt submission.
+	ErrPromptNotAccepted = errors.New("the agent did not accept the prompt")
 	// ErrAgentKindRequired means a manual handoff needs to create an agent but
 	// the configuration deliberately does not name a concrete agent kind.
 	ErrAgentKindRequired = errors.New("herdr.agent_kind is required to start a new agent")
+)
+
+const (
+	provisionGrace      = 2 * time.Second
+	promptCheckInterval = 250 * time.Millisecond
+	promptAcceptTimeout = 3 * time.Second
+	maxPromptAttempts   = 3
 )
 
 // Identifier reports what a directory holds, and whether the commit checked out
@@ -166,7 +176,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) 
 
 	best, passed, found := d.pick(ctx, agents, pr)
 	if !found {
-		if req.AllowProvision {
+		if req.AllowProvision || (d.cfg.Fallback == home.FallbackNew && d.canProvision()) {
 			return d.provision(ctx, agents, req)
 		}
 		err := noAgent(pr, passed)
@@ -224,14 +234,13 @@ func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, n
 		return res, nil
 	}
 
-	if err := d.herdr.Prompt(ctx, res.Target, text); err != nil {
+	if err := d.submitPrompt(ctx, res.Target, text); err != nil {
 		res.Detail = err.Error()
-		// The agent can reach a dialog between the state prutil read and the
-		// submission it sent, and herdr refuses the submission rather than
-		// answering the dialog. That is a reason to try later, not a failure.
 		res.Outcome = home.OutcomeFailed
-		if herdr.Code(err) == herdr.CodeAgentBlocked {
+		if errors.Is(err, ErrBlocked) || herdr.Code(err) == herdr.CodeAgentBlocked {
 			res.Outcome = home.OutcomeBlocked
+		} else if errors.Is(err, ErrNoAgent) {
+			res.Outcome = home.OutcomeNoAgent
 		}
 		d.toast(ctx, req, res.Detail)
 		return res, err
@@ -240,6 +249,58 @@ func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, n
 	res.Outcome = home.OutcomeSent
 	d.toast(ctx, req, fmt.Sprintf("sent to %s in %s", agentLabel(settled), short(res.Dir)))
 	return res, nil
+}
+
+// submitPrompt submits text to the target agent and verifies that the agent
+// enters a working, done or blocked state. If the keystrokes are dropped (for
+// example during startup of a TUI agent), it retries with exponential backoff.
+func (d *Dispatcher) submitPrompt(ctx context.Context, target, text string) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxPromptAttempts; attempt++ {
+		if err := d.herdr.Prompt(ctx, target, text); err != nil {
+			if herdr.Code(err) == herdr.CodeAgentBlocked {
+				return ErrBlocked
+			}
+			return err
+		}
+		accepted, err := d.waitForPromptAccept(ctx, target)
+		if err != nil {
+			return err
+		}
+		if accepted {
+			return nil
+		}
+		lastErr = ErrPromptNotAccepted
+		if attempt < maxPromptAttempts {
+			backoff := time.Duration(1<<(attempt-1)) * time.Second
+			if !d.sleep(ctx, backoff) {
+				return ctx.Err()
+			}
+		}
+	}
+	return lastErr
+}
+
+// waitForPromptAccept polls the agent until it leaves the idle state (i.e.
+// transitions to working, done, or blocked), indicating it has accepted the prompt.
+func (d *Dispatcher) waitForPromptAccept(ctx context.Context, target string) (bool, error) {
+	var waited time.Duration
+	for {
+		agent, err := d.herdr.Agent(ctx, target)
+		if err != nil {
+			return false, err
+		}
+		if agent.Status != herdr.StatusIdle {
+			return true, nil
+		}
+		if waited >= promptAcceptTimeout {
+			return false, nil
+		}
+		if !d.sleep(ctx, promptCheckInterval) {
+			return false, ctx.Err()
+		}
+		waited += promptCheckInterval
+	}
 }
 
 // renderPrompt renders the prompt for a handoff and makes sure it carries the
@@ -300,6 +361,10 @@ func (d *Dispatcher) fail(ctx context.Context, req Request, res Result, err erro
 // holding the handoff open for its full work duration.
 const startAgentTimeout = time.Minute
 
+func (d *Dispatcher) canProvision() bool {
+	return strings.TrimSpace(d.cfg.AgentKind) != "" && d.repos != nil && d.fetch != nil
+}
+
 // provision creates or reopens a herdr worktree only for a reader-initiated
 // handoff that had no existing agent candidate.
 func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Request) (Result, error) {
@@ -307,7 +372,7 @@ func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Re
 		return d.fail(ctx, req, Result{}, ErrAgentKindRequired)
 	}
 	if d.repos == nil || d.fetch == nil {
-		return d.fail(ctx, req, Result{}, errors.New("manual workspace provisioning is not configured"))
+		return d.fail(ctx, req, Result{}, errors.New("workspace provisioning is not configured"))
 	}
 
 	checkout, err := d.repos.Resolve(ctx, req.PR.Repo)
@@ -357,6 +422,10 @@ func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Re
 	}
 	if agent.Target() == "" {
 		return d.fail(ctx, req, res, errors.New("herdr started an agent without a target"))
+	}
+
+	if !d.sleep(ctx, provisionGrace) {
+		return d.fail(ctx, req, res, ctx.Err())
 	}
 
 	return d.send(ctx, req, agent, "", res)
@@ -518,8 +587,12 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 
 		c := d.assess(ctx, agent, checkout, pr)
 		if c.score == 0 {
-			passed = append(passed, c)
-			continue
+			if d.cfg.Fallback == home.FallbackRepo {
+				c.score = 1
+			} else {
+				passed = append(passed, c)
+				continue
+			}
 		}
 		if agent.Settled() {
 			c.score += scoreSettled
@@ -587,6 +660,10 @@ func (c candidate) note(pr model.PullRequest) string {
 		return fmt.Sprintf(
 			"The checkout in %s is on %s but does not have this pull request's latest commit, %s. Pull before changing anything.",
 			dir, branch, shortCommit(pr.HeadOID))
+	case !c.hasHead && !c.onBranch && !c.own:
+		return fmt.Sprintf(
+			"The checkout in %s is on %s, not this pull request's %s. Switch to the right branch before changing anything.",
+			dir, branch, pr.HeadRef)
 	}
 	return ""
 }

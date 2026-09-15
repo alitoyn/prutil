@@ -101,6 +101,9 @@ type HerdrConfig struct {
 	// AgentKind restricts handoffs to one kind of agent, such as "claude" or
 	// "copilot". Empty means any agent herdr recognises will do.
 	AgentKind string `yaml:"agent_kind"`
+	// Fallback governs the action taken when no active agent matches the
+	// pull request's head branch ("new", "none", or "repo").
+	Fallback FallbackStrategy `yaml:"fallback"`
 	// Skill names the triage skill the default prompt invokes.
 	Skill string `yaml:"skill"`
 	// Prompt is a text/template rendered with PromptData.
@@ -178,6 +181,7 @@ func (w WatchConfig) Marker() string {
 func DefaultConfig() Config {
 	return Config{
 		Herdr: HerdrConfig{
+			Fallback:    FallbackNew,
 			Prompt:      DefaultPrompt,
 			CheckPrompt: DefaultCheckPrompt,
 			WaitForIdle: Duration(15 * time.Minute),
@@ -225,6 +229,9 @@ const minPollInterval = 15 * time.Second
 // clamp brings a configuration back inside the range prutil is willing to act
 // on, rather than rejecting a file over a value it can simply correct.
 func (c *Config) clamp() {
+	if c.Herdr.Fallback == "" {
+		c.Herdr.Fallback = FallbackNew
+	}
 	if strings.TrimSpace(c.Herdr.Prompt) == "" {
 		c.Herdr.Prompt = DefaultPrompt
 	}
@@ -357,3 +364,42 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 // MarshalYAML implements yaml.Marshaler, so that a configuration prutil writes
 // back reads the same way it went in.
 func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
+
+// FallbackStrategy governs the action taken when no active agent matches the
+// pull request's head branch.
+type FallbackStrategy string
+
+const (
+	// FallbackNew provisions a new worktree and launches an agent for the PR.
+	FallbackNew FallbackStrategy = "new"
+	// FallbackNone reports that no matching agent was found and takes no further action.
+	FallbackNone FallbackStrategy = "none"
+	// FallbackRepo falls back to any available agent in the same repository.
+	FallbackRepo FallbackStrategy = "repo"
+)
+
+// String implements fmt.Stringer.
+func (f FallbackStrategy) String() string { return string(f) }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (f *FallbackStrategy) UnmarshalYAML(node *yaml.Node) error {
+	var text string
+	if err := node.Decode(&text); err != nil {
+		return fmt.Errorf("%s is not a valid fallback strategy", node.Value)
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "new", "provision", "create", "":
+		*f = FallbackNew
+	case "none", "strict", "never":
+		*f = FallbackNone
+	case "repo", "repository":
+		*f = FallbackRepo
+	default:
+		return fmt.Errorf("%q is not a fallback strategy; use \"new\", \"none\" or \"repo\"", text)
+	}
+	return nil
+}
+
+// MarshalYAML implements yaml.Marshaler.
+func (f FallbackStrategy) MarshalYAML() (any, error) { return string(f), nil }
+
