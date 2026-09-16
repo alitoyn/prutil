@@ -402,4 +402,3 @@ func (f *FallbackStrategy) UnmarshalYAML(node *yaml.Node) error {
 
 // MarshalYAML implements yaml.Marshaler.
 func (f FallbackStrategy) MarshalYAML() (any, error) { return string(f), nil }
-

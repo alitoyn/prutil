@@ -6,9 +6,10 @@
 // the checkout up for it, the branch tracks or is named after the pull
 // request's head, or the checkout holds the head commit. Branch names are never
 // compared for a likeness, because people name branches in too many ways for a
-// lookalike to mean the same work. When no agent qualifies, prutil says so and
-// names the agents it passed over rather than interrupting one of them; only a
-// reader pressing W goes on to set a workspace up.
+// lookalike to mean the same work. What happens when no agent qualifies is
+// herdr.fallback's to decide: new sets a workspace up, none says so and names
+// the agents it passed over, and repo hands the work to any agent in the
+// repository with the mismatch spelled out in the prompt.
 package handoff
 
 import (
@@ -47,10 +48,16 @@ var (
 )
 
 const (
-	provisionGrace      = 2 * time.Second
+	// provisionGrace gives an agent prutil has just started a moment to set
+	// its terminal up before the prompt arrives.
+	provisionGrace = 2 * time.Second
+	// promptCheckInterval and promptAcceptTimeout are how often, and for how
+	// long, prutil watches a freshly started agent for a sign that it took the
+	// prompt.
 	promptCheckInterval = 250 * time.Millisecond
 	promptAcceptTimeout = 3 * time.Second
-	maxPromptAttempts   = 3
+	// maxPromptAttempts bounds the submissions to a starting agent.
+	maxPromptAttempts = 3
 )
 
 // Identifier reports what a directory holds, and whether the commit checked out
@@ -84,6 +91,16 @@ type Request struct {
 	CheckHandoff bool          // use the failed-check investigation prompt
 	HeadOID      string        // commit whose checks are being investigated
 	Checks       []model.Check // all failed checks sent together for correlation
+}
+
+// headOID is the commit the handoff is about: the pull request's head, or the
+// commit a failed-check handoff named when the pull request it came with did
+// not say.
+func (r Request) headOID() string {
+	if r.PR.HeadOID != "" {
+		return r.PR.HeadOID
+	}
+	return r.HeadOID
 }
 
 // Result is what became of a handoff, in the shape the log wants.
@@ -168,11 +185,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) 
 	}
 
 	pr := req.PR
-	if pr.HeadOID == "" {
-		// A failed-check handoff names the commit it is about, which is the
-		// one to look for when the pull request it came with does not say.
-		pr.HeadOID = req.HeadOID
-	}
+	pr.HeadOID = req.headOID()
 
 	best, passed, found := d.pick(ctx, agents, pr)
 	if !found {
@@ -187,12 +200,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) 
 
 	agent := best.agent
 	res := Result{Target: agent.Target(), Kind: agent.Kind, Dir: agent.Dir()}
-	return d.send(ctx, req, agent, best.note(pr), res)
+	return d.send(ctx, req, agent, best.note(pr), res, false)
 }
 
 // send settles an agent, renders the prompt and submits it. initial carries
-// workspace metadata when the agent was created for this handoff.
-func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, note string, initial Result) (Result, error) {
+// workspace metadata when the agent was created for this handoff, and fresh
+// says that it was: an agent prutil has only just started is the one that can
+// miss the keystrokes, and so the only one prutil ever prompts twice.
+func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, note string, initial Result, fresh bool) (Result, error) {
 	res := initial
 	settled, waited, err := d.settle(ctx, agent)
 	res.Waited = waited
@@ -234,12 +249,13 @@ func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, n
 		return res, nil
 	}
 
-	if err := d.submitPrompt(ctx, res.Target, text); err != nil {
+	if err := d.submitPrompt(ctx, settled, text, fresh); err != nil {
 		res.Detail = err.Error()
 		res.Outcome = home.OutcomeFailed
-		if errors.Is(err, ErrBlocked) || herdr.Code(err) == herdr.CodeAgentBlocked {
+		switch {
+		case errors.Is(err, ErrBlocked):
 			res.Outcome = home.OutcomeBlocked
-		} else if errors.Is(err, ErrNoAgent) {
+		case errors.Is(err, ErrNoAgent):
 			res.Outcome = home.OutcomeNoAgent
 		}
 		d.toast(ctx, req, res.Detail)
@@ -251,56 +267,106 @@ func (d *Dispatcher) send(ctx context.Context, req Request, agent herdr.Agent, n
 	return res, nil
 }
 
-// submitPrompt submits text to the target agent and verifies that the agent
-// enters a working, done or blocked state. If the keystrokes are dropped (for
-// example during startup of a TUI agent), it retries with exponential backoff.
-func (d *Dispatcher) submitPrompt(ctx context.Context, target, text string) error {
-	var lastErr error
+// submitPrompt gives the prompt to the agent.
+//
+// A freshly started agent is the one case where keystrokes go missing: its
+// terminal may still be setting itself up when the text arrives. Only for that
+// agent does prutil check that the prompt landed and submit again if it did
+// not. An agent that was already running is prompted once, because herdr's
+// status can lag a prompt that did arrive, and a second copy of the same
+// feedback is worse than a slow status.
+//
+// Once any submission has succeeded the work is with the agent, so nothing
+// after that turns the handoff into a failure.
+func (d *Dispatcher) submitPrompt(ctx context.Context, agent herdr.Agent, text string, fresh bool) error {
+	before := agent.Status
+	if before == "" {
+		before = herdr.StatusIdle
+	}
+
+	delivered := false
 	for attempt := 1; attempt <= maxPromptAttempts; attempt++ {
-		if err := d.herdr.Prompt(ctx, target, text); err != nil {
-			if herdr.Code(err) == herdr.CodeAgentBlocked {
-				return ErrBlocked
+		err := d.herdr.Prompt(ctx, agent.Target(), text)
+		switch {
+		case err == nil:
+			delivered = true
+		case delivered:
+			// An earlier attempt reached the agent, so the work is there
+			// whatever this one ran into, including a dialog the agent has
+			// opened since.
+			return nil
+		case herdr.Code(err) == herdr.CodeAgentBlocked:
+			// herdr refuses a submission to an agent sitting at a dialog
+			// rather than answering it, which is a reason to try later.
+			return fmt.Errorf("%w: %w", ErrBlocked, err)
+		case herdr.Code(err) == herdr.CodeAgentNotFound:
+			return fmt.Errorf("%w: %w", ErrNoAgent, err)
+		case fresh && notReady(err) && attempt < maxPromptAttempts:
+			// herdr says the agent is not listening yet, which is the one
+			// refusal worth waiting out.
+			if !d.sleep(ctx, promptBackoff(attempt)) {
+				return err
 			}
+			continue
+		default:
 			return err
 		}
-		accepted, err := d.waitForPromptAccept(ctx, target)
-		if err != nil {
-			return err
-		}
-		if accepted {
+
+		if !fresh {
 			return nil
 		}
-		lastErr = ErrPromptNotAccepted
-		if attempt < maxPromptAttempts {
-			backoff := time.Duration(1<<(attempt-1)) * time.Second
-			if !d.sleep(ctx, backoff) {
-				return ctx.Err()
-			}
+		if accepted, known := d.accepted(ctx, agent.Target(), before); accepted || !known {
+			// An unknown answer is not a reason to send the prompt twice.
+			return nil
+		}
+		if attempt < maxPromptAttempts && !d.sleep(ctx, promptBackoff(attempt)) {
+			// The handoff ran out of time, but the agent has the prompt.
+			return nil
 		}
 	}
-	return lastErr
+	return ErrPromptNotAccepted
 }
 
-// waitForPromptAccept polls the agent until it leaves the idle state (i.e.
-// transitions to working, done, or blocked), indicating it has accepted the prompt.
-func (d *Dispatcher) waitForPromptAccept(ctx context.Context, target string) (bool, error) {
+// accepted reports whether the agent reacted to a prompt, and whether herdr
+// could say at all.
+//
+// Reacting means working or waiting on a dialog of its own, or at least moving
+// to some other state. "Not idle" would not do: done is a resting state, like
+// idle, for an agent that has finished earlier work, so an agent sitting at
+// done would look as though it had taken a prompt that never arrived.
+func (d *Dispatcher) accepted(ctx context.Context, target, before string) (accepted, known bool) {
 	var waited time.Duration
 	for {
 		agent, err := d.herdr.Agent(ctx, target)
 		if err != nil {
-			return false, err
+			return false, false
 		}
-		if agent.Status != herdr.StatusIdle {
-			return true, nil
-		}
-		if waited >= promptAcceptTimeout {
-			return false, nil
+		switch {
+		case agent.Status == herdr.StatusWorking || agent.Status == herdr.StatusBlocked:
+			return true, true
+		case agent.Status != before && agent.Status != herdr.StatusUnknown && agent.Status != "":
+			return true, true
+		case waited >= promptAcceptTimeout:
+			return false, true
 		}
 		if !d.sleep(ctx, promptCheckInterval) {
-			return false, ctx.Err()
+			return false, false
 		}
 		waited += promptCheckInterval
 	}
+}
+
+// notReady reports whether herdr refused a prompt because the agent has not
+// finished starting up, which is the one refusal worth trying again.
+func notReady(err error) bool {
+	code := herdr.Code(err)
+	return code == herdr.CodeAgentNotReady || code == herdr.CodeAgentPromptStalled
+}
+
+// promptBackoff spaces out the attempts to reach an agent that is still
+// starting: a second, then two.
+func promptBackoff(attempt int) time.Duration {
+	return time.Duration(1<<(attempt-1)) * time.Second
 }
 
 // renderPrompt renders the prompt for a handoff and makes sure it carries the
@@ -365,8 +431,9 @@ func (d *Dispatcher) canProvision() bool {
 	return strings.TrimSpace(d.cfg.AgentKind) != "" && d.repos != nil && d.fetch != nil
 }
 
-// provision creates or reopens a herdr worktree only for a reader-initiated
-// handoff that had no existing agent candidate.
+// provision creates or reopens a herdr worktree for a handoff that found no
+// agent working on the pull request. W always allows it; every other handoff
+// reaches it only when herdr.fallback is new.
 func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Request) (Result, error) {
 	if strings.TrimSpace(d.cfg.AgentKind) == "" {
 		return d.fail(ctx, req, Result{}, ErrAgentKindRequired)
@@ -409,12 +476,20 @@ func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Re
 		return res, nil
 	}
 
-	session, err := d.openWorktree(ctx, checkout.Root, workspaceBranch(req.PR), label, req.PR.Number)
+	session, reused, err := d.openWorktree(ctx, checkout.Root, workspaceBranch(req.PR), label, req.PR.Number)
 	if err != nil {
 		return d.fail(ctx, req, res, err)
 	}
 	res.Workspace, res.Tab = session.WorkspaceID, session.TabID
 	res.Provisioned = true
+
+	// A worktree prutil made earlier is reopened as it was left, without a
+	// fetch: git refuses to fetch into a branch that is checked out. The agent
+	// starting there is told where the pull request's commits are instead.
+	note := ""
+	if head := req.headOID(); reused != "" && head != "" && !d.git.Contains(ctx, reused, head) {
+		note = staleWorkspaceNote(short(reused), head, req.PR.Number)
+	}
 
 	agent, err := d.herdr.StartAgent(ctx, name, d.cfg.AgentKind, session.RootPaneID, startAgentTimeout)
 	if err != nil {
@@ -428,38 +503,42 @@ func (d *Dispatcher) provision(ctx context.Context, agents []herdr.Agent, req Re
 		return d.fail(ctx, req, res, ctx.Err())
 	}
 
-	return d.send(ctx, req, agent, "", res)
+	return d.send(ctx, req, agent, note, res, true)
 }
 
 // openWorktree reuses an existing matching checkout before asking herdr to
-// create one. If creation reports an error after creating the checkout, a
-// fresh list can safely recover only an exact branch match; otherwise the
-// original error remains visible instead of guessing at a path.
-func (d *Dispatcher) openWorktree(ctx context.Context, root, branch, label string, number int) (herdr.WorktreeSession, error) {
+// create one, and reports the path when it reused one, which is what lets the
+// caller warn an agent about a workspace left behind the pull request. If
+// creation reports an error after creating the checkout, a fresh list can
+// safely recover only an exact branch match; otherwise the original error
+// remains visible instead of guessing at a path.
+func (d *Dispatcher) openWorktree(ctx context.Context, root, branch, label string, number int) (herdr.WorktreeSession, string, error) {
 	worktrees, err := d.herdr.Worktrees(ctx, root)
 	if err != nil {
-		return herdr.WorktreeSession{}, err
+		return herdr.WorktreeSession{}, "", err
 	}
 	if existing, ok := worktreeForBranch(worktrees, branch); ok {
-		return d.herdr.OpenWorktree(ctx, root, existing.Path, branch, label)
+		session, err := d.herdr.OpenWorktree(ctx, root, existing.Path, branch, label)
+		return session, existing.Path, err
 	}
 	if err := d.fetch.FetchPullRequest(ctx, root, number, branch); err != nil {
-		return herdr.WorktreeSession{}, err
+		return herdr.WorktreeSession{}, "", err
 	}
 
 	session, createErr := d.herdr.CreateWorktree(ctx, root, branch, label)
 	if createErr == nil {
-		return session, nil
+		return session, "", nil
 	}
 
 	worktrees, listErr := d.herdr.Worktrees(ctx, root)
 	if listErr != nil {
-		return herdr.WorktreeSession{}, createErr
+		return herdr.WorktreeSession{}, "", createErr
 	}
 	if existing, ok := worktreeForBranch(worktrees, branch); ok {
-		return d.herdr.OpenWorktree(ctx, root, existing.Path, branch, label)
+		session, err := d.herdr.OpenWorktree(ctx, root, existing.Path, branch, label)
+		return session, existing.Path, err
 	}
-	return herdr.WorktreeSession{}, createErr
+	return herdr.WorktreeSession{}, "", createErr
 }
 
 // worktreeForBranch returns a usable existing worktree for branch.
@@ -572,7 +651,7 @@ const (
 // passed over in the pull request's repository, so that a handoff nobody can
 // take can say who was there and what they had checked out.
 func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.PullRequest) (candidate, []candidate, bool) {
-	var found, passed []candidate
+	var found, fallback, passed []candidate
 	for _, agent := range agents {
 		if agent.PaneID != "" && agent.PaneID == d.selfPane {
 			continue
@@ -586,18 +665,23 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 		}
 
 		c := d.assess(ctx, agent, checkout, pr)
-		if c.score == 0 {
-			if d.cfg.Fallback == home.FallbackRepo {
-				c.score = 1
-			} else {
-				passed = append(passed, c)
-				continue
-			}
-		}
 		if agent.Settled() {
 			c.score += scoreSettled
 		}
-		found = append(found, c)
+		switch {
+		case c.score > scoreSettled:
+			found = append(found, c)
+		case d.cfg.Fallback == home.FallbackRepo:
+			// Nothing but the repository matches. These are kept apart rather
+			// than scored alongside, so that being ready for input can never
+			// put an agent on other work above one on the pull request.
+			fallback = append(fallback, c)
+		default:
+			passed = append(passed, c)
+		}
+	}
+	if len(found) == 0 {
+		found = fallback
 	}
 	if len(found) == 0 {
 		return candidate{}, passed, false
@@ -650,8 +734,10 @@ func (d *Dispatcher) assess(ctx context.Context, agent herdr.Agent, checkout git
 func (c candidate) note(pr model.PullRequest) string {
 	dir, branch := short(c.agent.Dir()), branchLabel(c.checkout.Branch)
 	switch {
-	case c.own:
+	case c.own && (c.hasHead || pr.HeadOID == ""):
 		return ""
+	case c.own:
+		return staleWorkspaceNote(dir, pr.HeadOID, pr.Number)
 	case c.hasHead && !c.onBranch:
 		return fmt.Sprintf(
 			"The checkout in %s is on %s, which has this pull request's latest commit but is not its branch, %s. Make sure your commits reach %s.",
@@ -666,6 +752,16 @@ func (c candidate) note(pr model.PullRequest) string {
 			dir, branch, pr.HeadRef)
 	}
 	return ""
+}
+
+// staleWorkspaceNote tells an agent in a workspace prutil made how to reach the
+// pull request's latest commit. That branch tracks nothing, so pulling is not
+// the instruction: the pull request's own ref is where the commits are.
+func staleWorkspaceNote(dir, headOID string, number int) string {
+	return fmt.Sprintf(
+		"The checkout in %s does not have this pull request's latest commit, %s. "+
+			"Run git fetch origin pull/%d/head && git merge --ff-only FETCH_HEAD before changing anything.",
+		dir, shortCommit(headOID), number)
 }
 
 // noAgent explains a handoff nobody could take. Naming the agents that were in

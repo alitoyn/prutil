@@ -19,6 +19,10 @@ import (
 	"github.com/relloyd/prutil/internal/model"
 )
 
+// maxPromptAttemptsInTests mirrors the dispatcher's own cap on submissions to
+// an agent that is still starting.
+const maxPromptAttemptsInTests = 3
+
 // samplePR is the pull request every test hands over.
 func samplePR() model.PullRequest {
 	return model.PullRequest{
@@ -36,17 +40,20 @@ type fakeHerdr struct {
 	// gets is consumed one reply per call to Agent, which is how a test makes
 	// a working agent settle after a given number of looks. The last entry is
 	// repeated once the queue runs dry.
-	gets        []herdr.Agent
-	getErr      error
-	promptErr   error
-	worktrees   [][]herdr.Worktree
-	worktreeErr error
-	create      herdr.WorktreeSession
-	createErr   error
-	open        herdr.WorktreeSession
-	openErr     error
-	start       herdr.Agent
-	startErr    error
+	gets      []herdr.Agent
+	getErr    error
+	promptErr error
+	// promptErrFrom makes promptErr apply only from the nth submission
+	// onwards, which is how a test fails a retry after one that worked.
+	promptErrFrom int
+	worktrees     [][]herdr.Worktree
+	worktreeErr   error
+	create        herdr.WorktreeSession
+	createErr     error
+	open          herdr.WorktreeSession
+	openErr       error
+	start         herdr.Agent
+	startErr      error
 
 	prompted []string
 	texts    []string
@@ -104,7 +111,7 @@ func (f *fakeHerdr) StartAgent(_ context.Context, name, kind, pane string, _ tim
 }
 
 func (f *fakeHerdr) Prompt(_ context.Context, target, text string) error {
-	if f.promptErr != nil {
+	if f.promptErr != nil && len(f.prompted)+1 >= max(f.promptErrFrom, 1) {
 		return f.promptErr
 	}
 	f.prompted = append(f.prompted, target)
@@ -189,6 +196,63 @@ func dispatcherWithProvision(t *testing.T, control *fakeHerdr, checkouts handoff
 			return ctx.Err() == nil
 		},
 	}), &waits
+}
+
+// sleepingDispatcher builds a dispatcher that records what it waited for,
+// which is how the prompt tests see the backoff without spending it.
+func sleepingDispatcher(t *testing.T, control *fakeHerdr, checkouts handoff.Identifier, repos handoff.RepositoryResolver, fetch git.PullRequestFetcher, tune func(*home.Config)) (*handoff.Dispatcher, *[]time.Duration) {
+	t.Helper()
+
+	cfg := home.DefaultConfig()
+	cfg.Herdr.Skill = "pr-triage"
+	if tune != nil {
+		tune(&cfg)
+	}
+
+	var slept []time.Duration
+	return handoff.New(handoff.Options{
+		Herdr:    control,
+		Git:      checkouts,
+		Repos:    repos,
+		Fetch:    fetch,
+		Config:   cfg,
+		SelfPane: "w1:p3",
+		Sleep: func(ctx context.Context, d time.Duration) bool {
+			slept = append(slept, d)
+			return ctx.Err() == nil
+		},
+	}), &slept
+}
+
+// startedAgent is the agent herdr reports once prutil has started one.
+func startedAgent(status string) herdr.Agent {
+	return herdr.Agent{Kind: "claude", Status: status, PaneID: "w8:p1", Name: "pr-relloyd-prutil-42"}
+}
+
+// statusReads is a queue of n status reads that all say the same thing.
+func statusReads(n int, status string) []herdr.Agent {
+	out := make([]herdr.Agent, 0, n)
+	for range n {
+		out = append(out, startedAgent(status))
+	}
+	return out
+}
+
+// provisioningHerdr is a herdr with nothing running, ready to create a
+// workspace and start the agent a test describes.
+func provisioningHerdr(start herdr.Agent, gets []herdr.Agent) *fakeHerdr {
+	return &fakeHerdr{
+		create: herdr.WorktreeSession{WorkspaceID: "w8", TabID: "w8:t1", RootPaneID: "w8:p1"},
+		start:  start,
+		gets:   gets,
+	}
+}
+
+// provisionRequest is a handoff that will have to set a workspace up.
+func provisionRequest() handoff.Request {
+	req := request()
+	req.AllowProvision = true
+	return req
 }
 
 func request() handoff.Request {
@@ -886,69 +950,177 @@ func TestProvisionPausesForStartupGraceBeforePrompting(t *testing.T) {
 	assert.Equal(t, []string{"w8:p1"}, control.prompted)
 }
 
-func TestPromptAcceptanceVerifiedAndRetriedOnIdleWithBackoff(t *testing.T) {
-	var gets []herdr.Agent
-	for range 13 {
-		gets = append(gets, herdr.Agent{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w3:p1"})
-	}
-	gets = append(gets, herdr.Agent{Kind: "claude", Status: herdr.StatusWorking, PaneID: "w3:p1"})
-
+func TestAnAgentThatWasAlreadyRunningIsPromptedOnce(t *testing.T) {
+	// herdr's status can lag a prompt the agent really did take, so a second
+	// copy of the same feedback is the likelier outcome of trying again.
 	control := &fakeHerdr{
 		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}},
-		gets:   gets,
+		gets:   statusReads(20, herdr.StatusIdle),
 	}
 	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"}}
-	var sleepDurations []time.Duration
-	cfg := home.DefaultConfig()
-	cfg.Herdr.Skill = "pr-triage"
-	dispatcher := handoff.New(handoff.Options{
-		Herdr:    control,
-		Git:      checkouts,
-		Config:   cfg,
-		SelfPane: "w1:p3",
-		Sleep: func(ctx context.Context, d time.Duration) bool {
-			sleepDurations = append(sleepDurations, d)
-			return ctx.Err() == nil
-		},
-	})
 
+	dispatcher, slept := sleepingDispatcher(t, control, checkouts, nil, nil, nil)
 	res, err := dispatcher.Dispatch(context.Background(), request())
 
 	require.NoError(t, err)
 	assert.Equal(t, home.OutcomeSent, res.Outcome)
-	assert.Len(t, control.prompted, 2, "prompt was retried once")
-	assert.Contains(t, sleepDurations, 1*time.Second, "exponential backoff between prompt attempts")
+	assert.Len(t, control.prompted, 1, "an agent that was already running is never prompted twice")
+	assert.Empty(t, *slept, "and nothing waits on it to react")
 }
 
-func TestPromptFailureWhenAgentNeverAcceptsPrompt(t *testing.T) {
-	control := &fakeHerdr{
-		agents: []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w3:p1"}},
-		gets: []herdr.Agent{
-			{Kind: "claude", Status: herdr.StatusIdle, PaneID: "w3:p1"},
-		},
-	}
-	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"}}
-	var sleepDurations []time.Duration
-	cfg := home.DefaultConfig()
-	cfg.Herdr.Skill = "pr-triage"
-	dispatcher := handoff.New(handoff.Options{
-		Herdr:    control,
-		Git:      checkouts,
-		Config:   cfg,
-		SelfPane: "w1:p3",
-		Sleep: func(ctx context.Context, d time.Duration) bool {
-			sleepDurations = append(sleepDurations, d)
-			return ctx.Err() == nil
-		},
-	})
+func TestAnAgentPrutilJustStartedIsPromptedAgainWhenItDoesNotReact(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle),
+		append(statusReads(13, herdr.StatusIdle), startedAgent(herdr.StatusWorking)))
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
 
-	res, err := dispatcher.Dispatch(context.Background(), request())
+	dispatcher, slept := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Len(t, control.prompted, 2, "the new agent had not reacted, so the prompt went again")
+	assert.Contains(t, *slept, time.Second, "the attempts are spaced out")
+}
+
+func TestAnAgentSittingAtDoneIsNotMistakenForOneThatTookThePrompt(t *testing.T) {
+	// done is a resting state, like idle, for an agent that has finished
+	// earlier work. Counting "not idle" as acceptance would record a prompt
+	// that never arrived as delivered and drop the feedback.
+	control := provisioningHerdr(startedAgent(herdr.StatusDone), statusReads(1, herdr.StatusDone))
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+
+	dispatcher, _ := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
 
 	require.ErrorIs(t, err, handoff.ErrPromptNotAccepted)
 	assert.Equal(t, home.OutcomeFailed, res.Outcome)
-	assert.Len(t, control.prompted, 3, "retried 3 times")
-	assert.Contains(t, sleepDurations, 1*time.Second)
-	assert.Contains(t, sleepDurations, 2*time.Second)
+	assert.Len(t, control.prompted, maxPromptAttemptsInTests)
 }
 
+func TestAnAgentThatFinishesStraightAwayCountsAsHavingTakenThePrompt(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle), statusReads(1, herdr.StatusDone))
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
 
+	dispatcher, _ := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Len(t, control.prompted, 1, "moving off idle is the agent reacting, whichever state it moved to")
+}
+
+func TestAProblemReadingTheAgentAfterItHasThePromptIsStillASend(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle), nil)
+	control.getErr = errors.New("herdr: reading the agent timed out")
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+
+	dispatcher, _ := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
+
+	require.NoError(t, err, "the prompt was delivered; only the check on it failed")
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Len(t, control.prompted, 1)
+}
+
+func TestADialogOnARetryDoesNotUndoAPromptTheAgentAlreadyHas(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle), statusReads(1, herdr.StatusIdle))
+	control.promptErr = &herdr.APIError{Code: herdr.CodeAgentBlocked, Message: "agent is blocked"}
+	control.promptErrFrom = 2
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+
+	dispatcher, _ := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome, "the first submission reached the agent")
+	assert.Len(t, control.prompted, 1)
+}
+
+func TestANewAgentThatNeverReactsIsAFailureSoTheFeedbackIsSentAgainLater(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle), statusReads(1, herdr.StatusIdle))
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+
+	dispatcher, slept := sleepingDispatcher(t, control, fakeGit{}, repos, &fakeFetcher{}, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), provisionRequest())
+
+	require.ErrorIs(t, err, handoff.ErrPromptNotAccepted)
+	assert.Equal(t, home.OutcomeFailed, res.Outcome)
+	assert.Len(t, control.prompted, maxPromptAttemptsInTests)
+	assert.Contains(t, *slept, 1*time.Second)
+	assert.Contains(t, *slept, 2*time.Second)
+}
+
+func TestTheRepoFallbackNeverOutranksAnAgentWithEvidence(t *testing.T) {
+	control := &fakeHerdr{
+		agents: []herdr.Agent{
+			{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"},
+			{Kind: "claude", Status: herdr.StatusWorking, CWD: "/work/retry", PaneID: "w9:p1"},
+		},
+		gets: []herdr.Agent{{Kind: "claude", Status: herdr.StatusDone, PaneID: "w9:p1"}},
+	}
+	checkouts := fakeGit{
+		"/work/main":  {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"},
+		"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry", Upstream: "refs/heads/feat/uploader-retry"},
+	}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackRepo
+	})
+	_, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"w9:p1"}, control.prompted,
+		"an idle agent on other work never beats a busy one on the pull request")
+	assert.NotContains(t, control.texts[0], "Switch to the right branch")
+}
+
+func TestAWorkspacePrutilSetUpIsToldHowToReachTheLatestCommit(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/prutil-42", PaneID: "w8:p1"},
+	}}
+	checkouts := fakeGit{"/work/prutil-42": {Repo: "relloyd/prutil", Branch: "prutil/relloyd-prutil-42", Head: "1111111"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, nil)
+	req := request()
+	req.PR.HeadOID = "c0ffee1234"
+
+	_, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Contains(t, control.texts[0], "does not have this pull request's latest commit, c0ffee1")
+	assert.Contains(t, control.texts[0], "git fetch origin pull/42/head",
+		"the workspace branch tracks nothing, so pulling is not the instruction")
+}
+
+func TestReopeningAWorkspaceThatIsBehindTellsTheNewAgentToFetch(t *testing.T) {
+	control := provisioningHerdr(startedAgent(herdr.StatusIdle), nil)
+	control.worktrees = [][]herdr.Worktree{{{Path: "/work/prutil-42", Branch: "prutil/relloyd-prutil-42"}}}
+	control.open = herdr.WorktreeSession{WorkspaceID: "w8", TabID: "w8:t1", RootPaneID: "w8:p1"}
+	checkouts := fakeGit{"/work/prutil-42": {Repo: "relloyd/prutil", Branch: "prutil/relloyd-prutil-42", Head: "1111111"}}
+	repos := &fakeResolver{checkout: git.Checkout{Root: "/work/prutil", Repo: "relloyd/prutil"}}
+	fetch := &fakeFetcher{}
+
+	dispatcher, _ := dispatcherWithProvision(t, control, checkouts, repos, fetch, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+	})
+	req := provisionRequest()
+	req.PR.HeadOID = "c0ffee1234"
+
+	_, err := dispatcher.Dispatch(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Empty(t, fetch.calls, "git refuses to fetch into a branch that is checked out in a worktree")
+	assert.Contains(t, control.texts[0], "git fetch origin pull/42/head")
+}

@@ -124,4 +124,3 @@ func TestTheWrittenTemplateNamesFallback(t *testing.T) {
 	tmpl := string(home.DefaultConfigTemplate())
 	assert.Contains(t, tmpl, "fallback: new")
 }
-

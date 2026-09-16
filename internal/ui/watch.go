@@ -377,7 +377,8 @@ func (a *App) applyReview(msg watchReviewMsg) tea.Cmd {
 
 // notifyNewFeedback manually enters the watcher path after its change-detection
 // step. It still uses the automatic handoff semantics: only fresh feedback is
-// sent, and it cannot provision a workspace or agent.
+// sent, and whether a missing agent is set up follows herdr.fallback, exactly
+// as it does for the watcher.
 func (a *App) notifyNewFeedback() tea.Cmd {
 	if a.active != viewOpen {
 		return status("new-feedback notification is available only for open pull requests")
