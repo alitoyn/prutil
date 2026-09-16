@@ -377,7 +377,8 @@ func (a *App) applyReview(msg watchReviewMsg) tea.Cmd {
 
 // notifyNewFeedback manually enters the watcher path after its change-detection
 // step. It still uses the automatic handoff semantics: only fresh feedback is
-// sent, and it cannot provision a workspace or agent.
+// sent, and whether a missing agent is set up follows herdr.fallback, exactly
+// as it does for the watcher.
 func (a *App) notifyNewFeedback() tea.Cmd {
 	if a.active != viewOpen {
 		return status("new-feedback notification is available only for open pull requests")
@@ -647,7 +648,7 @@ func (a *App) handoffNote(msg handoffMsg) string {
 
 	switch {
 	case errors.Is(msg.err, handoff.ErrNoAgent):
-		return fmt.Sprintf("%s: %s, but no agent is checked out in %s", key, counts, msg.pr.Repo)
+		return fmt.Sprintf("%s: %s, but no agent in %s is working on it", key, counts, msg.pr.Repo)
 	case errors.Is(msg.err, handoff.ErrBlocked):
 		return fmt.Sprintf("%s: %s is waiting on a dialog of its own, so %s was not sent", key, target, key)
 	case errors.Is(msg.err, handoff.ErrStillWorking):

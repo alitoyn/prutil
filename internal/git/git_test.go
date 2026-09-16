@@ -34,9 +34,11 @@ func (f *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 
 func checkoutRunner() *fakeRunner {
 	return &fakeRunner{replies: map[string]string{
-		"-C /work/prutil rev-parse --show-toplevel": "/work/prutil",
-		"-C /work/prutil branch --show-current":     "feat/uploader-retry",
-		"-C /work/prutil remote get-url origin":     "git@github.com:relloyd/prutil.git",
+		"-C /work/prutil rev-parse --show-toplevel":                     "/work/prutil",
+		"-C /work/prutil branch --show-current":                         "feat/uploader-retry",
+		"-C /work/prutil remote get-url origin":                         "git@github.com:relloyd/prutil.git",
+		"-C /work/prutil rev-parse HEAD":                                "c0ffee1234",
+		"-C /work/prutil config --get branch.feat/uploader-retry.merge": "refs/heads/feat/uploader-retry",
 	}}
 }
 
@@ -46,6 +48,8 @@ func TestIdentifyReadsTheRepositoryAndBranchOutOfACheckout(t *testing.T) {
 	assert.Equal(t, "/work/prutil", got.Root)
 	assert.Equal(t, "relloyd/prutil", got.Repo)
 	assert.Equal(t, "feat/uploader-retry", got.Branch)
+	assert.Equal(t, "c0ffee1234", got.Head)
+	assert.Equal(t, "refs/heads/feat/uploader-retry", got.Upstream)
 }
 
 func TestADirectoryThatIsNotAWorkingTreeIsAnOrdinaryEmptyAnswer(t *testing.T) {
@@ -82,7 +86,7 @@ func TestASecondLookAtTheSameDirectoryComesFromTheCache(t *testing.T) {
 	second := client.Identify(context.Background(), "/work/prutil")
 
 	assert.Equal(t, first, second)
-	assert.Equal(t, 3, runner.calls, "three reads, once, however often the answer is wanted")
+	assert.Equal(t, 5, runner.calls, "five reads, once, however often the answer is wanted")
 }
 
 func TestParseRemoteHandlesTheShapesGitHandsOut(t *testing.T) {
@@ -104,4 +108,44 @@ func TestParseRemoteHandlesTheShapesGitHandsOut(t *testing.T) {
 			assert.Equal(t, tc.want, git.ParseRemote(tc.url))
 		})
 	}
+}
+
+func TestADetachedHeadHasNoUpstreamToAskAbout(t *testing.T) {
+	runner := &fakeRunner{replies: map[string]string{
+		"-C /work/prutil rev-parse --show-toplevel": "/work/prutil",
+		"-C /work/prutil branch --show-current":     "",
+		"-C /work/prutil remote get-url origin":     "git@github.com:relloyd/prutil.git",
+		"-C /work/prutil rev-parse HEAD":            "c0ffee1234",
+	}}
+
+	got := git.New(runner).Identify(context.Background(), "/work/prutil")
+	assert.Equal(t, "c0ffee1234", got.Head)
+	assert.Empty(t, got.Upstream)
+	assert.Equal(t, 4, runner.calls, "a detached head has no branch whose upstream could be read")
+}
+
+func TestABranchThatTracksNothingHasAnEmptyUpstream(t *testing.T) {
+	runner := checkoutRunner()
+	runner.fails = map[string]bool{"-C /work/prutil config --get branch.feat/uploader-retry.merge": true}
+
+	got := git.New(runner).Identify(context.Background(), "/work/prutil")
+	assert.Equal(t, "feat/uploader-retry", got.Branch)
+	assert.Empty(t, got.Upstream)
+}
+
+func TestContainsAsksGitWhetherACommitIsInTheCheckoutsHistory(t *testing.T) {
+	runner := &fakeRunner{
+		replies: map[string]string{"-C /work/prutil merge-base --is-ancestor c0ffee1234 HEAD": ""},
+		fails:   map[string]bool{"-C /work/prutil merge-base --is-ancestor 0badc0de HEAD": true},
+	}
+	client := git.New(runner)
+	ctx := context.Background()
+
+	assert.True(t, client.Contains(ctx, "/work/prutil", "c0ffee1234"))
+	assert.False(t, client.Contains(ctx, "/work/prutil", "0badc0de"),
+		"a commit outside the history, or one git never fetched, is not contained")
+	assert.False(t, client.Contains(ctx, "/work/prutil", "--output=/tmp/x"),
+		"anything but a commit hash stays off git's command line")
+	assert.False(t, client.Contains(ctx, "", "c0ffee1234"))
+	assert.Equal(t, 2, runner.calls)
 }

@@ -100,7 +100,7 @@ prutil -query 'is:open is:pr author:@me org:acme sort:created-desc'
 | `a` | auto-refresh: reload every 30s, five times over. press again to add five more |
 | `w` | watch the selected pull request, or stop watching it |
 | `W` | hand the selected pull request's open review feedback to a coding agent now, creating one when needed |
-| `F` | investigate the selected pull request's failed checks now; this never creates an agent |
+| `F` | investigate the selected pull request's failed checks now |
 | `R` | trigger an AI review on the selected open pull request by posting the configured comment |
 | `N` | check the selected open pull request for new review feedback and notify an existing agent |
 | `tab` | switch between your open and your recently closed pull requests |
@@ -187,26 +187,47 @@ over again only when it gains a new latest comment.
 
 `N` is a diagnostic trigger for the automatic path. It asks GitHub for the
 selected open pull request's review threads and sends only feedback prutil has
-not handed over before. It never provisions a checkout, worktree, workspace,
-or agent, so it is useful for confirming the normal no-agent and herdr
-notification behavior without waiting for the watcher to spot a change.
+not handed over before, so it is useful for confirming the normal handoff
+behaviour without waiting for the watcher to spot a change. Like the watcher,
+it follows `herdr.fallback` when no agent is working on the pull request.
 
 prutil picks the agent rather than asking you to. It lists the agents herdr
-knows about, reads the repository and branch out of each one's working
-directory, and prefers the one sitting on the pull request's head branch. An
-agent one branch away is used too, and told so in the prompt. The terminal
-prutil is itself running in is never given work. If the agent is busy prutil
-waits for it to finish, up to fifteen minutes, and if it is stuck at a prompt of
-its own nothing is sent at all.
+knows about and asks git what each one's working directory is working on. An
+agent qualifies when prutil set its workspace up for the pull request, when its
+branch tracks the pull request's head branch or has the same name, or when its
+checkout holds the pull request's latest commit. Branch names are never compared
+for a likeness: `fix/retry` and `feat/retry` are different work, and so are
+`main` and `chore/sync-main`. When more than one agent qualifies, the stronger
+evidence wins, then the one ready for input. The prompt carries a warning only
+when there is something true to say: the checkout is behind the pull request, or
+holds its commits on a branch that will not reach it.
+
+What happens when no agent qualifies is `herdr.fallback`'s to decide:
+
+| `fallback` | When nothing is working on the pull request |
+| --- | --- |
+| `new` (default) | set a workspace up for it and start an agent there, the way `W` does |
+| `none` | send nothing; the herdr notification and `handoffs.jsonl` name the agents prutil passed over |
+| `repo` | hand the work to any agent in the repository, with the mismatch spelled out in the prompt |
+
+Under `new` and `none` an agent busy with other work is never interrupted.
+`repo` is the setting that allows it, and prefers an agent that really is on the
+pull request whenever there is one. The terminal prutil is itself running in is
+never given work. If the agent is busy prutil waits for it to finish, up to
+fifteen minutes, and if it is stuck at a prompt of its own nothing is sent at
+all. An agent prutil has just started is given a moment to come up, and is
+prompted again if it does not react; an agent that was already running is
+prompted once.
 
 `W` is also the explicit consent to set up a workspace when no suitable agent
 exists. It resolves a local checkout, fetches the pull request's
 `pull/<number>/head` ref, reopens an existing matching herdr worktree when it
 can, or creates a no-focus worktree workspace and starts the configured agent
 there. Set `herdr.agent_kind` to the herdr agent kind to start (for example
-`claude` or `copilot`); it is required only for this creation path. The
-automatic watcher never creates a Git worktree, herdr workspace, or agent: it
-continues to report that no local agent was available.
+`claude` or `copilot`); it is required whenever prutil starts an agent, and
+without it a handoff with nothing to hand to reports that no local agent was
+available. The watcher, `F` and `N` set a workspace up the same way under the
+default `fallback: new`; set `fallback: none` to keep creation to `W` alone.
 
 Nothing is ever handed over twice. Each thread prutil sends is remembered
 against the comment it ended on, so pressing `W` again on a review whose
@@ -272,11 +293,13 @@ template there, with these defaults. Every key remains optional:
 
 ```yaml
 herdr:
-  agent_kind: claude        # required only when W starts a new agent
+  agent_kind: claude        # required whenever prutil starts an agent
   skill: pr-comment-triage  # the skill the default prompt invokes
   wait_for_idle: 15m        # how long to wait for a busy agent
   dry_run: false
   toast: true               # show a herdr notification alongside each handoff
+  fallback: new             # no agent on the pull request: "new" sets one up,
+                            # "none" reports it, "repo" uses any agent in the repo
   # Optional separate Go template for failed-check investigations. It receives
   # Repo, Number, URL, Title, HeadRef, BaseRef, Checks and Note.
   check_prompt: "..."

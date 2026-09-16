@@ -222,7 +222,7 @@ func TestCreatingAWorktreePinsTheArgumentOrderAndReadsWorkspaceTabAndRootPane(t 
 
 func TestOpeningAWorktreeDecodesObjectIdentifiersAndPassesNoFocus(t *testing.T) {
 	runner := &fakeRunner{replies: map[string]reply{
-		"worktree open --cwd /repos/prutil --path /repos/prutil-pr42 --branch pr-42 --label prutil#42 --no-focus": {
+		"worktree open --cwd /repos/prutil --path /repos/prutil-pr42 --label prutil#42 --no-focus": {
 			out: `{"result":{"workspace":{"workspace_id":"ws-2"},"tab":{"id":"tab-4"},"root_pane":{"pane_id":"pane-7"}}}`,
 		},
 	}}
@@ -235,7 +235,7 @@ func TestOpeningAWorktreeDecodesObjectIdentifiersAndPassesNoFocus(t *testing.T) 
 
 	require.Len(t, runner.calls, 1)
 	assert.Equal(t,
-		[]string{"worktree", "open", "--cwd", "/repos/prutil", "--path", "/repos/prutil-pr42", "--branch", "pr-42", "--label", "prutil#42", "--no-focus"},
+		[]string{"worktree", "open", "--cwd", "/repos/prutil", "--path", "/repos/prutil-pr42", "--label", "prutil#42", "--no-focus"},
 		runner.calls[0],
 	)
 }
@@ -255,7 +255,7 @@ func TestCreatingAWorktreeUnwrapsAServerErrorEnvelopeFromStandardError(t *testin
 
 func TestOpeningAWorktreeFailsWhenRequiredIdentifiersAreMissing(t *testing.T) {
 	runner := &fakeRunner{replies: map[string]reply{
-		"worktree open --cwd /repos/prutil --path /repos/prutil-pr42 --branch pr-42 --label prutil#42 --no-focus": {
+		"worktree open --cwd /repos/prutil --path /repos/prutil-pr42 --label prutil#42 --no-focus": {
 			out: `{"result":{"workspace":{},"tab":"tab-4","root_pane":"pane-7"}}`,
 		},
 	}}
@@ -277,6 +277,10 @@ func TestWorktreeCommandsValidateRequiredInputsBeforeAnyProcessCall(t *testing.T
 	_, err = client.CreateWorktree(context.Background(), "/repos/prutil", "", "label")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "worktree create: branch is required")
+
+	_, err = client.OpenWorktree(context.Background(), "/repos/prutil", "", "", "label")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "worktree open: path or branch is required")
 
 	_, err = client.OpenWorktree(context.Background(), "/repos/prutil", "/path", "pr-42", "")
 	require.Error(t, err)

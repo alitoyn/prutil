@@ -89,3 +89,38 @@ func TestTheWrittenTemplateNamesReviewComment(t *testing.T) {
 	assert.Contains(t, tmpl, "review:")
 	assert.Contains(t, tmpl, "comment: \"/gemini review\"")
 }
+
+func TestFallbackDefaults(t *testing.T) {
+	cfg := home.DefaultConfig()
+	assert.Equal(t, home.FallbackNew, cfg.Herdr.Fallback)
+}
+
+func TestFallbackStrategyCanBeConfigured(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected home.FallbackStrategy
+	}{
+		{"herdr:\n  fallback: new\n", home.FallbackNew},
+		{"herdr:\n  fallback: provision\n", home.FallbackNew},
+		{"herdr:\n  fallback: none\n", home.FallbackNone},
+		{"herdr:\n  fallback: strict\n", home.FallbackNone},
+		{"herdr:\n  fallback: repo\n", home.FallbackRepo},
+		{"herdr:\n  fallback: repository\n", home.FallbackRepo},
+	}
+	for _, tc := range cases {
+		cfg, err := home.ParseConfig([]byte(tc.input))
+		require.NoError(t, err)
+		assert.Equal(t, tc.expected, cfg.Herdr.Fallback)
+	}
+}
+
+func TestInvalidFallbackReturnsError(t *testing.T) {
+	_, err := home.ParseConfig([]byte("herdr:\n  fallback: invalid\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fallback strategy")
+}
+
+func TestTheWrittenTemplateNamesFallback(t *testing.T) {
+	tmpl := string(home.DefaultConfigTemplate())
+	assert.Contains(t, tmpl, "fallback: new")
+}

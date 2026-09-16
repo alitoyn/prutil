@@ -206,6 +206,29 @@ only reschedules what it has a reading for, so anything else stays due at a
 time already past and the schedule computes a zero delay, which is a request
 loop.
 
+`handoff.pick` matches an agent to a pull request on what git says about its
+checkout, never on how its branch name looks: prutil's own workspace branch,
+a branch that tracks or is named after the pull request's head, or a checkout
+holding the head commit (`git.Client.Contains`), which a branch stacked on the
+pull request only counts for when it tracks no remote branch of its own. Do not
+add prefix stripping or any other name normalisation; `fix/foo` and `feat/foo`,
+and `main` and `chore/sync-main`, are different work.
+
+With no match, `herdr.fallback` decides: `new` (the default) sets a workspace up
+and starts an agent, for the watcher, `F` and `N` as well as for `W`
+(`Request.AllowProvision`, which always allows it); `none` sends nothing and the
+`ErrNoAgent` detail names the agents passed over; `repo` hands the work to any
+agent in the repository. Keep the repo fallback in its own list inside `pick`:
+scored alongside the rest, being ready for input would put an agent on other
+work above one that is on the pull request.
+
+Only an agent prutil has just started is prompted twice. herdr's status lags a
+prompt that did arrive, so re-sending to an agent that was already running
+delivers the same feedback again; and `done` is a resting state like `idle`, so
+acceptance means working, blocked, or any move to another state, never simply
+"not idle". Once a submission has succeeded, nothing afterwards turns the
+handoff into a failure.
+
 `internal/ui` holds one `prRuntime` per pull request rather than a map per
 field. Six maps written from six places and cleaned up from four is how a
 cleanup comes to reach five of them. `a.checks` stays separate: it is fetched
