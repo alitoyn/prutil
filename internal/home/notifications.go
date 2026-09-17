@@ -138,6 +138,22 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 	if !event.Known() {
 		return fmt.Errorf("prutil has no %q notification", event)
 	}
+	return s.setBoolSetting(notificationPath(event), on, func(c *Config) {
+		c.Notifications.Set(event, on)
+	})
+}
+
+// SetWatchSelfReview writes the watch.self_review setting into config.yaml,
+// and nothing else.
+func (s *Store) SetWatchSelfReview(on bool) error {
+	return s.setBoolSetting([]string{"watch", "self_review"}, on, func(c *Config) {
+		c.Watch.SelfReview = on
+	})
+}
+
+// setBoolSetting writes a boolean scalar to path in config.yaml, checking that
+// nothing else changed.
+func (s *Store) setBoolSetting(path []string, on bool, mutate func(c *Config)) error {
 	// Creates the template when the file has gone, and says so when it does
 	// not parse, which is not a file to be editing.
 	if _, err := s.LoadOrCreateConfig(); err != nil {
@@ -161,7 +177,6 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 		return err
 	}
 
-	path := notificationPath(event)
 	manual := fmt.Errorf("set %s to %t in %s by hand", dotted(path), on, target)
 	edited, err := setScalar(data, path, strconv.FormatBool(on))
 	if err != nil {
@@ -172,7 +187,7 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 	// edit did, the only difference it may make is the one asked for.
 	want := before
 	want.Notifications.Events = maps.Clone(before.Notifications.Events)
-	want.Notifications.Set(event, on)
+	mutate(&want)
 	after, err := ParseConfig(edited)
 	if err != nil || !reflect.DeepEqual(after, want) {
 		return fmt.Errorf("could not change %s without disturbing the rest of it; %w", target, manual)
