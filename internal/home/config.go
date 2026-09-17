@@ -21,7 +21,16 @@ const DefaultPrompt = `{{if .Skill}}/{{.Skill}} {{.URL}}{{else}}` +
 
 It is {{.HeadRef}} into {{.BaseRef}}, with {{.UnresolvedCount}} unresolved review ` +
 	`{{if eq .UnresolvedCount 1}}thread{{else}}threads{{end}}. Read each one, make the ` +
-	`changes that should be made, and reply on the threads you are leaving alone saying why.` +
+	`changes that should be made, and reply on the threads you are leaving alone saying why.
+
+When replying on review threads:
+1. Start with the blockquote line:
+> automated AI response
+
+2. Put a blank line after it so subsequent lines are not formatted as blockquotes.
+3. Include a tracking tag at the end of the comment:
+<!-- prutil:agent commit:<COMMIT_SHA> -->
+(replace <COMMIT_SHA> with the commit SHA of your changes, or HEAD if no commit was made).` +
 	`{{end}}{{if .Note}}
 
 {{.Note}}{{end}}`
@@ -151,6 +160,9 @@ type WatchConfig struct {
 	// nth poll regardless of the tripwire, because a reply inside an existing
 	// thread moves no counter.
 	ForcePreciseEvery int `yaml:"force_precise_every"`
+	// SelfReview treats all unresolved review comments written by the viewer
+	// as actionable feedback, as long as they are not automated agent comments.
+	SelfReview bool `yaml:"self_review"`
 	// SelfTestMarker lets you count one of your own review comments as
 	// feedback by writing this string in it, which is how the watcher is tried
 	// against a real pull request without waiting for a reviewer. It answers
@@ -178,6 +190,14 @@ func (w WatchConfig) Marker() string {
 		return model.DefaultSelfTestMarker
 	}
 	return *w.SelfTestMarker
+}
+
+// ReviewFilter returns the review filter configured by the watch settings.
+func (w WatchConfig) ReviewFilter() model.ReviewFilter {
+	return model.ReviewFilter{
+		Marker:     w.Marker(),
+		SelfReview: w.SelfReview,
+	}
 }
 
 // DefaultConfig is the configuration prutil uses when nothing overrides it.

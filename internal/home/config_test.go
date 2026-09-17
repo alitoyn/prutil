@@ -124,3 +124,21 @@ func TestTheWrittenTemplateNamesFallback(t *testing.T) {
 	tmpl := string(home.DefaultConfigTemplate())
 	assert.Contains(t, tmpl, "fallback: new")
 }
+
+func TestSelfReviewDefaultsToFalse(t *testing.T) {
+	cfg := home.DefaultConfig()
+	assert.False(t, cfg.Watch.SelfReview)
+	assert.False(t, cfg.Watch.ReviewFilter().SelfReview)
+}
+
+func TestSelfReviewCanBeEnabled(t *testing.T) {
+	cfg, err := home.ParseConfig([]byte("watch:\n  self_review: true\n"))
+	require.NoError(t, err)
+	assert.True(t, cfg.Watch.SelfReview)
+	assert.True(t, cfg.Watch.ReviewFilter().SelfReview)
+}
+
+func TestTheWrittenTemplateNamesSelfReview(t *testing.T) {
+	tmpl := string(home.DefaultConfigTemplate())
+	assert.Contains(t, tmpl, "self_review: false")
+}

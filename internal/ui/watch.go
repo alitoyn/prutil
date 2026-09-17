@@ -327,7 +327,7 @@ func (a *App) applyReview(msg watchReviewMsg) tea.Cmd {
 		return status("could not read the review threads on " + msg.key.String() + ": " + msg.err.Error())
 	}
 
-	feedback := msg.review.Feedback(a.homeCfg.Watch.Marker())
+	feedback := msg.review.Feedback(a.homeCfg.Watch.ReviewFilter())
 	entry := a.mutate(msg.key)
 	entry.feedback, entry.hasFeedback = len(feedback), true
 	a.engine.Precise(msg.key, len(feedback), false, now)
@@ -503,7 +503,7 @@ func (a *App) handOff() tea.Cmd {
 func (a *App) dispatch(pr model.PullRequest) tea.Cmd {
 	client, send := a.client, a.sender(true)
 	notified := a.state.Get(pr.Key().String()).NotifiedThreads
-	budget, marker := a.handoffBudget(), a.homeCfg.Watch.Marker()
+	budget, filter := a.handoffBudget(), a.homeCfg.Watch.ReviewFilter()
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
@@ -517,7 +517,7 @@ func (a *App) dispatch(pr model.PullRequest) tea.Cmd {
 			}}
 		}
 
-		feedback := review.Feedback(marker)
+		feedback := review.Feedback(filter)
 		msg := handoffMsg{
 			pr:      pr,
 			open:    len(feedback),
