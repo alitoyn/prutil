@@ -55,6 +55,9 @@ func (a *App) render() string {
 	if a.overlay.open {
 		lines = a.renderHelpOverlay(lines)
 	}
+	if a.settings.open {
+		lines = a.renderSettings(lines)
+	}
 	return strings.Join(lines, "\n")
 }
 

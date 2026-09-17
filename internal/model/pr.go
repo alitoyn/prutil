@@ -81,9 +81,13 @@ type PullRequest struct {
 	State          PRState
 	Mergeable      Mergeable
 	ReviewDecision ReviewDecision
-	Additions      int
-	Deletions      int
-	ChangedFiles   int
+	// Approvals counts the approving reviews nobody has dismissed. It is the
+	// only sign of approval in a repository without review rules, where
+	// GitHub gives a pull request no review decision at all.
+	Approvals    int
+	Additions    int
+	Deletions    int
+	ChangedFiles int
 	// Comments counts pull request conversation comments. It excludes both
 	// code-review threads and review submissions.
 	Comments int
@@ -97,6 +101,21 @@ type PullRequest struct {
 // Key returns the identity of the pull request.
 func (p PullRequest) Key() Key {
 	return Key{Repo: p.Repo, Number: p.Number}
+}
+
+// Approved reports whether the pull request stands approved. See IsApproved.
+func (p PullRequest) Approved() bool { return IsApproved(p.ReviewDecision, p.Approvals) }
+
+// IsApproved decides whether a pull request stands approved. GitHub's review
+// decision is the answer wherever the repository has review rules, because it
+// knows how many approvals those rules want and whether a request for changes
+// outweighs them. Without rules there is no decision to read, and an approval
+// nobody has dismissed is the only sign there is.
+func IsApproved(decision ReviewDecision, approvals int) bool {
+	if decision != ReviewNone {
+		return decision == ReviewApproved
+	}
+	return approvals > 0
 }
 
 // Snapshot is the cheap reading the watcher takes of a pull request: enough to
@@ -119,6 +138,10 @@ type Snapshot struct {
 	HeadOID string
 	// Rollup is the check state, which is what says whether CI is still busy.
 	Rollup Status
+	// ReviewDecision and Approvals are where the pull request stands with its
+	// reviewers, which is what an approval notification is raised on.
+	ReviewDecision ReviewDecision
+	Approvals      int
 	// Comments is the issue-comment total and Threads the review-thread total,
 	// resolved ones included.
 	Comments int
@@ -132,8 +155,14 @@ func (s Snapshot) Moved(previous Snapshot) bool {
 		s.Rollup != previous.Rollup ||
 		!s.UpdatedAt.Equal(previous.UpdatedAt) ||
 		s.Comments != previous.Comments ||
-		s.Threads != previous.Threads
+		s.Threads != previous.Threads ||
+		s.ReviewDecision != previous.ReviewDecision ||
+		s.Approvals != previous.Approvals
 }
+
+// Approved reports whether the reading shows the pull request approved. See
+// IsApproved.
+func (s Snapshot) Approved() bool { return IsApproved(s.ReviewDecision, s.Approvals) }
 
 // Busy reports whether the pull request has checks still running, which is the
 // one state worth polling quickly.

@@ -229,7 +229,7 @@ func (a *App) pollWatched() tea.Cmd {
 		for i := range snaps {
 			snaps[i].Key = byID[snaps[i].NodeID]
 		}
-		return watchSnapshotMsg{keys: due, snaps: snaps}
+		return watchSnapshotMsg{keys: due, snaps: snaps, at: now}
 	}
 }
 
@@ -274,7 +274,7 @@ func (a *App) applyWatch(msg watchSnapshotMsg) tea.Cmd {
 		}
 	}
 
-	cmds := []tea.Cmd{a.scheduleWatch()}
+	cmds := []tea.Cmd{a.scheduleWatch(), a.notice(readingsOfSnapshots(msg.snaps, msg.at))}
 	for _, key := range precise {
 		cmds = append(cmds, a.loadReview(key, false))
 	}
@@ -754,6 +754,8 @@ type watchTickMsg struct {
 type watchSnapshotMsg struct {
 	keys  []model.Key
 	snaps []model.Snapshot
+	// at is when the readings were asked for.
+	at time.Time
 }
 
 // watchReviewMsg carries review conversations requested by the watcher or the

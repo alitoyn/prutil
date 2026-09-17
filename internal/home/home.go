@@ -182,9 +182,11 @@ type Startup struct {
 func (s *Store) Load() Startup {
 	out := Startup{Config: DefaultConfig(), State: NewState()}
 
-	// A configuration is something the reader wrote on purpose, so it is never
-	// moved or rewritten. Standing the defaults in its place and saying so is
-	// the most prutil should do with it.
+	// A configuration is something the reader wrote on purpose, so one that
+	// will not parse is never moved or rewritten. Standing the defaults in its
+	// place and saying so is the most prutil should do with it. Beyond the
+	// first-run template, the settings pane is the only writer, and
+	// SetNotification refuses such a file too.
 	if cfg, err := s.LoadOrCreateConfig(); err != nil {
 		out.Notes = append(out.Notes, fmt.Errorf("%w; the built-in defaults are in use", err))
 	} else {
@@ -367,31 +369,7 @@ func (s *Store) scanHandoffs(name, pr string, limit int, history []Handoff) ([]H
 // writeAtomic replaces one file by writing a sibling and renaming it over the
 // target, which is atomic within a directory on every platform prutil runs on.
 func (s *Store) writeAtomic(name string, data []byte) error {
-	if err := os.MkdirAll(s.dir, dirPerm); err != nil {
-		return fmt.Errorf("could not create %s: %w", s.dir, err)
-	}
-
-	tmp, err := os.CreateTemp(s.dir, name+".*")
-	if err != nil {
-		return fmt.Errorf("could not write %s: %w", s.Path(name), err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-
-	if err := tmp.Chmod(filePerm); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("could not write %s: %w", s.Path(name), err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("could not write %s: %w", s.Path(name), err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("could not write %s: %w", s.Path(name), err)
-	}
-	if err := os.Rename(tmp.Name(), s.Path(name)); err != nil {
-		return fmt.Errorf("could not write %s: %w", s.Path(name), err)
-	}
-	return nil
+	return replaceFile(s.Path(name), data, filePerm)
 }
 
 // Handoff is one line of the handoff log.

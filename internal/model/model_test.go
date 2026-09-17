@@ -405,3 +405,39 @@ func TestAnotherPersonsMarkerChangesNothing(t *testing.T) {
 	assert.False(t, thread.NeedsAttention("me", model.DefaultSelfTestMarker),
 		"the marker was not in a comment the viewer wrote")
 }
+
+func TestIsApproved(t *testing.T) {
+	cases := []struct {
+		name      string
+		decision  model.ReviewDecision
+		approvals int
+		want      bool
+	}{
+		{"an approved decision is approved", model.ReviewApproved, 1, true},
+		{"the decision wins over an approval the rules do not count yet", model.ReviewRequired, 1, false},
+		{"a request for changes outweighs the approvals beside it", model.ReviewChangesRequested, 2, false},
+		{"without rules an approval is the only sign there is", model.ReviewNone, 1, true},
+		{"without rules and without an approval nothing is approved", model.ReviewNone, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, model.IsApproved(tc.decision, tc.approvals))
+			assert.Equal(t, tc.want, model.PullRequest{ReviewDecision: tc.decision, Approvals: tc.approvals}.Approved())
+			assert.Equal(t, tc.want, model.Snapshot{ReviewDecision: tc.decision, Approvals: tc.approvals}.Approved())
+		})
+	}
+}
+
+func TestASnapshotMovesWhenTheReviewersDo(t *testing.T) {
+	base := model.Snapshot{HeadOID: "abc", ReviewDecision: model.ReviewRequired}
+
+	decided := base
+	decided.ReviewDecision = model.ReviewApproved
+	assert.True(t, decided.Moved(base), "a new review decision is a change")
+
+	approved := base
+	approved.Approvals = 1
+	assert.True(t, approved.Moved(base), "a new approval is a change")
+
+	assert.False(t, base.Moved(base))
+}

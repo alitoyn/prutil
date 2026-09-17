@@ -21,6 +21,7 @@ import (
 
 	"github.com/relloyd/prutil/internal/browser"
 	"github.com/relloyd/prutil/internal/clipboard"
+	"github.com/relloyd/prutil/internal/desktop"
 	"github.com/relloyd/prutil/internal/gh"
 	"github.com/relloyd/prutil/internal/git"
 	"github.com/relloyd/prutil/internal/handoff"
@@ -89,6 +90,7 @@ func run() error {
 		Client:    client,
 		Opener:    browser.New(os.Getenv("BROWSER")),
 		Clipboard: clipboard.New(),
+		Notifier:  desktop.New(),
 		Query:     *query,
 		Limit:     *limit,
 		Closed: gh.ClosedOptions{

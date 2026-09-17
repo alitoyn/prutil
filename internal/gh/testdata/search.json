@@ -15,6 +15,7 @@
           "updatedAt": "2026-09-02T18:30:00Z",
           "mergeable": "MERGEABLE",
           "reviewDecision": "APPROVED",
+          "approvals": { "totalCount": 2 },
           "additions": 120,
           "deletions": 30,
           "changedFiles": 7,

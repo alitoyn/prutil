@@ -61,6 +61,18 @@ func DefaultConfigTemplate() []byte {
 	out.WriteString("  # repos:\n")
 	out.WriteString("  #   owner/repo: \"@coderabbitai review\"\n\n")
 
+	out.WriteString("notifications:\n")
+	out.WriteString("  # Desktop notifications prutil raises when one of your open pull requests\n")
+	out.WriteString("  # changes. Press s in prutil to turn them on and off; it saves the change\n")
+	out.WriteString("  # here. herdr.toast is separate: it is herdr's own notification of a handoff.\n")
+	out.WriteString("  # While any is on, every open pull request is read this often.\n")
+	_, _ = fmt.Fprintf(&out, "  interval: %s\n", cfg.Notifications.Interval)
+	out.WriteString("  events:\n")
+	for _, event := range NotificationEvents() {
+		_, _ = fmt.Fprintf(&out, "    %s: %t\n", event, cfg.Notifications.Enabled(event))
+	}
+	out.WriteString("\n")
+
 	out.WriteString("# Optional explicit checkout locations by owner/name.\n")
 	out.WriteString("# Example:\n")
 	out.WriteString("# repos:\n")

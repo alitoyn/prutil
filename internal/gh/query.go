@@ -32,6 +32,7 @@ query($q: String!, $first: Int!, $after: String) {
         updatedAt
         mergeable
         reviewDecision
+        approvals: reviews(states: [APPROVED]) { totalCount }
         additions
         deletions
         changedFiles
@@ -254,6 +255,11 @@ query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
 // review thread changes neither comment count, and a resolved thread changes
 // the thread count in the wrong direction, so the counts alone would miss
 // both.
+//
+// reviewDecision and the approval count are what a desktop notification is
+// raised on. The same query reads every open pull request, armed or not, when
+// a notification is turned on, because an approval is news whether or not an
+// agent is involved.
 const watchQuery = `
 query($ids: [ID!]!) {
   nodes(ids: $ids) {
@@ -261,6 +267,8 @@ query($ids: [ID!]!) {
     ... on PullRequest {
       id
       updatedAt
+      reviewDecision
+      approvals: reviews(states: [APPROVED]) { totalCount }
       comments { totalCount }
       reviewThreads { totalCount }
       commits(last: 1) {

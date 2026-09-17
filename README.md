@@ -104,6 +104,7 @@ prutil -query 'is:open is:pr author:@me org:acme sort:created-desc'
 | `R` | trigger an AI review on the selected open pull request by posting the configured comment |
 | `N` | check the selected open pull request for new review feedback and notify an existing agent |
 | `tab` | switch between your open and your recently closed pull requests |
+| `s` or `,` | open settings: choose which pull request changes raise a desktop notification |
 | `?` | open the shortcut overlay: type to filter, `enter` to run the highlighted shortcut, `esc` or `?` to close |
 | `q` or `ctrl+c` | quit |
 
@@ -122,6 +123,44 @@ keys go to the filter, so `q` types rather than quits; `ctrl+c` still quits.
 Copying uses whichever clipboard program your platform provides: `pbcopy` on
 macOS, `clip` on Windows, and `wl-copy`, `xclip` or `xsel` on Linux, whichever
 is installed first. If none is, prutil says which ones it looked for.
+
+## Desktop notifications
+
+prutil can tell you when one of your open pull requests changes, with a
+notification from your operating system, so you can leave it running in a
+terminal you are not looking at. It raises one today:
+
+| Notification | When |
+| --- | --- |
+| Pull request approved | GitHub's review decision turns to approved, or, in a repository without review rules, the pull request gets its first approval |
+
+It is on by default. Press `s` (or `,`) to open the settings, where `space`
+turns a notification on or off, `t` sends a test notification, and `esc`
+closes the pane. A change is saved to `config.yaml` as soon as you make it:
+prutil changes that one value in place and leaves the rest of the file, your
+comments included, exactly as it was. A configuration that does not parse, or
+that is written in a shape prutil does not edit (such as a flow mapping), is
+left alone, and the pane says which setting to change by hand.
+
+While any notification is on, prutil reads every open pull request every two
+minutes (`notifications.interval`), using the watcher's cheap query: one
+request, and one rate limit point, per hundred pull requests. A watched pull
+request is also read on the watcher's own schedule, and a refresh reads the
+whole list, so either may notice a change sooner. The first reading of each
+pull request after prutil starts only records where it stands; a pull request
+approved while prutil was not running is not announced.
+
+These are separate from `herdr.toast`, which is herdr's own notification of a
+handoff. New review feedback and failed checks are what the watcher hands to
+an agent, so they are not duplicated here.
+
+Notifications are shown with `osascript` on macOS, `notify-send` (libnotify) on
+Linux, and Windows PowerShell on Windows. macOS files `osascript`'s
+notifications under Script Editor, so if the test notification does not
+appear, allow notifications for Script Editor in System Settings ›
+Notifications. The title and body are passed as arguments rather than as part
+of a script, and control and invisible formatting characters are removed from
+them first, since anybody who can open a pull request chooses its title.
 
 ## Auto-refresh
 
@@ -289,7 +328,9 @@ an AI review) wakes that specific pull request.
 
 prutil reads `config.yaml` from `$PRUTIL_HOME`, else `$XDG_CONFIG_HOME/prutil`,
 else `~/.config/prutil`. On first startup it creates a complete editable
-template there, with these defaults. Every key remains optional:
+template there. The file is yours: the only thing prutil ever writes back is a
+setting you change in its settings pane, one value at a time. Every key remains
+optional, and these are the defaults:
 
 ```yaml
 herdr:
@@ -317,6 +358,10 @@ review:
   comment: "/gemini review"  # comment posted by R to trigger an AI review; "" turns it off
   repos:
     acme/widgets: "@coderabbitai review"  # optional per-repository override
+notifications:
+  interval: 2m              # how often every open pull request is read while one is on
+  events:
+    approved: true          # a pull request is approved; s in prutil toggles it
 repos:
   acme/widgets: ~/src/widgets  # optional explicit checkout for W
 discovery:

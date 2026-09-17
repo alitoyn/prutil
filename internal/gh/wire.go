@@ -64,6 +64,7 @@ type prNode struct {
 	State          string     `json:"state"`
 	Mergeable      string     `json:"mergeable"`
 	ReviewDecision string     `json:"reviewDecision"`
+	Approvals      totalCount `json:"approvals"`
 	Additions      int        `json:"additions"`
 	Deletions      int        `json:"deletions"`
 	ChangedFiles   int        `json:"changedFiles"`
@@ -103,6 +104,7 @@ func (n prNode) toPullRequest() (model.PullRequest, bool) {
 		State:          model.ParsePRState(n.State),
 		Mergeable:      model.ParseMergeable(n.Mergeable),
 		ReviewDecision: model.ParseReviewDecision(n.ReviewDecision),
+		Approvals:      n.Approvals.TotalCount,
 		Additions:      n.Additions,
 		Deletions:      n.Deletions,
 		ChangedFiles:   n.ChangedFiles,
@@ -131,6 +133,11 @@ func (n prNode) toPullRequest() (model.PullRequest, bool) {
 		pr.Rollup = model.ParseRollupState(rollup.State)
 	}
 	return pr, true
+}
+
+// totalCount is a connection read for its size alone.
+type totalCount struct {
+	TotalCount int `json:"totalCount"`
 }
 
 type commitConnection struct {
@@ -314,10 +321,12 @@ type watchResponse struct {
 
 // watchNode is one pull request as the tripwire selects it.
 type watchNode struct {
-	TypeName  string     `json:"__typename"`
-	ID        string     `json:"id"`
-	UpdatedAt *time.Time `json:"updatedAt"`
-	Comments  struct {
+	TypeName       string     `json:"__typename"`
+	ID             string     `json:"id"`
+	UpdatedAt      *time.Time `json:"updatedAt"`
+	ReviewDecision string     `json:"reviewDecision"`
+	Approvals      totalCount `json:"approvals"`
+	Comments       struct {
 		TotalCount int `json:"totalCount"`
 	} `json:"comments"`
 	ReviewThreads struct {
@@ -343,11 +352,13 @@ func (n watchNode) toSnapshot() (model.Snapshot, bool) {
 	}
 
 	snap := model.Snapshot{
-		NodeID:    n.ID,
-		UpdatedAt: at(n.UpdatedAt),
-		Comments:  n.Comments.TotalCount,
-		Threads:   n.ReviewThreads.TotalCount,
-		Rollup:    model.StatusUnknown,
+		NodeID:         n.ID,
+		UpdatedAt:      at(n.UpdatedAt),
+		Comments:       n.Comments.TotalCount,
+		Threads:        n.ReviewThreads.TotalCount,
+		Rollup:         model.StatusUnknown,
+		ReviewDecision: model.ParseReviewDecision(n.ReviewDecision),
+		Approvals:      n.Approvals.TotalCount,
 	}
 	if len(n.Commits.Nodes) > 0 {
 		commit := n.Commits.Nodes[0].Commit

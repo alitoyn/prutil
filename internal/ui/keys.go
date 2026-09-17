@@ -29,6 +29,7 @@ type keyMap struct {
 	TriggerReview key.Binding
 	Notify        key.Binding
 	NextTab       key.Binding
+	Settings      key.Binding
 	Help          key.Binding
 	Quit          key.Binding
 }
@@ -99,6 +100,12 @@ func defaultKeys() keyMap {
 		NextTab: key.NewBinding(
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "open/closed"),
+		),
+		// s for settings, and , because that is where the settings are in
+		// every macOS application.
+		Settings: key.NewBinding(
+			key.WithKeys("s", ","),
+			key.WithHelp("s", "settings"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
@@ -226,6 +233,8 @@ func (k keyMap) helpSections(mouse bool) []helpSection {
 				detail: "Check the selected open pull request for new review feedback and notify an existing agent."},
 		}},
 		{title: "General", entries: []helpEntry{
+			{binding: k.Settings, title: "settings",
+				detail: "Choose which pull request changes raise a desktop notification. Each change is saved to the configuration file as it is made."},
 			{binding: k.Help, title: "keyboard shortcuts",
 				detail: "Open this list. Type to filter, enter to run the highlighted shortcut, esc to close."},
 			{binding: k.Quit, title: "quit",
@@ -267,6 +276,7 @@ func keyLabel(b key.Binding) string {
 // namedKeys are the key names a binding can use that are not a character.
 var namedKeys = map[string]rune{
 	"enter": tea.KeyEnter,
+	"space": tea.KeySpace,
 	"tab":   tea.KeyTab,
 	"esc":   tea.KeyEscape,
 	"up":    tea.KeyUp,
@@ -342,6 +352,51 @@ func defaultOverlayKeys() overlayKeyMap {
 		HalfPageDown: key.NewBinding(
 			key.WithKeys("ctrl+d"),
 			key.WithHelp("ctrl+d", "half page down"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
+		),
+	}
+}
+
+// settingsKeyMap holds the keys the settings pane reads while it is open. They
+// are apart from keyMap for the same reason as the overlay's: nothing pressed
+// in the pane should reach the list behind it.
+type settingsKeyMap struct {
+	Close  key.Binding
+	Toggle key.Binding
+	Test   key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Quit   key.Binding
+}
+
+// defaultSettingsKeys returns the bindings the settings pane reads. The keys
+// that open it also close it, the way ? does for the overlay, and so does q:
+// a reader pressing it in a pane of settings wants the pane gone, and what
+// they changed is already saved either way.
+func defaultSettingsKeys() settingsKeyMap {
+	return settingsKeyMap{
+		Close: key.NewBinding(
+			key.WithKeys("esc", "s", ",", "q"),
+			key.WithHelp("esc", "close"),
+		),
+		Toggle: key.NewBinding(
+			key.WithKeys("space", "enter", "x"),
+			key.WithHelp("space", "toggle"),
+		),
+		Test: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("t", "test"),
+		),
+		Up: key.NewBinding(
+			key.WithKeys("up", "k", "ctrl+p"),
+			key.WithHelp("↑", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j", "ctrl+n"),
+			key.WithHelp("↓", "down"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c"),

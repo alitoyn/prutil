@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 
+	"github.com/relloyd/prutil/internal/desktop"
 	"github.com/relloyd/prutil/internal/gh"
 	"github.com/relloyd/prutil/internal/handoff"
 	"github.com/relloyd/prutil/internal/home"
@@ -215,6 +216,47 @@ func clipboardOf(t *testing.T, app *App) *fakeClipboard {
 	return board
 }
 
+// fakeNotifier records the desktop notifications the app asked for.
+type fakeNotifier struct {
+	mu          sync.Mutex
+	shown       []desktop.Notification
+	err         error
+	unavailable error
+	hint        string
+}
+
+func (f *fakeNotifier) Notify(n desktop.Notification) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.shown = append(f.shown, n)
+	return nil
+}
+
+func (f *fakeNotifier) Available() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unavailable
+}
+
+func (f *fakeNotifier) Hint() string { return f.hint }
+
+func (f *fakeNotifier) notifications() []desktop.Notification {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]desktop.Notification(nil), f.shown...)
+}
+
+// notifierOf returns the fake notifier newTestApp handed the app.
+func notifierOf(t *testing.T, app *App) *fakeNotifier {
+	t.Helper()
+	got, ok := app.notifier.(*fakeNotifier)
+	require.True(t, ok, "the app under test must have been given a fake notifier")
+	return got
+}
+
 // fakeOpener records the URLs the app asked to open.
 type fakeOpener struct {
 	mu   sync.Mutex
@@ -418,8 +460,9 @@ func sampleThreads() gh.Review {
 
 // newTestApp builds an app sized to the given terminal, with the list already
 // loaded and every check cached, so tests can go straight to behaviour. Its
-// clipboard, its handoff dispatcher and its application directory are all
-// fakes; reach them through app.clip, dispatcherOf and app.store.
+// clipboard, its handoff dispatcher, its notifier and its application
+// directory are all fakes; reach them through app.clip, dispatcherOf,
+// notifierOf and app.store.
 func newTestApp(t *testing.T, width, height int) (*App, *fakeClient, *fakeOpener) {
 	t.Helper()
 
@@ -440,6 +483,7 @@ func newTestApp(t *testing.T, width, height int) (*App, *fakeClient, *fakeOpener
 		State:     home.NewState(),
 		Home:      fastWatch(),
 		Handoff:   &fakeDispatcher{},
+		Notifier:  &fakeNotifier{},
 	})
 
 	send(t, app, tea.WindowSizeMsg{Width: width, Height: height})
@@ -465,6 +509,7 @@ func fastWatch() home.Config {
 		NotifiedInterval: tiny, MaxNotifiedInterval: tiny, IdleInterval: tiny,
 		DormantAfter: 3, ForcePreciseEvery: 5,
 	}
+	cfg.Notifications.Interval = tiny
 	return cfg
 }
 
@@ -501,6 +546,8 @@ func press(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "space":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	default:

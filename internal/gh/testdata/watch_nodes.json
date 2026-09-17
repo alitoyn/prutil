@@ -5,6 +5,8 @@
         "__typename": "PullRequest",
         "id": "PR_42",
         "updatedAt": "2026-09-09T16:35:21Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "approvals": { "totalCount": 1 },
         "comments": { "totalCount": 3 },
         "reviewThreads": { "totalCount": 6 },
         "commits": {
@@ -23,6 +25,8 @@
         "__typename": "PullRequest",
         "id": "PR_7",
         "updatedAt": "2026-09-09T15:49:20Z",
+        "reviewDecision": null,
+        "approvals": { "totalCount": 2 },
         "comments": { "totalCount": 0 },
         "reviewThreads": { "totalCount": 0 },
         "commits": {

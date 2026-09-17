@@ -50,6 +50,9 @@ type Config struct {
 	Herdr  HerdrConfig  `yaml:"herdr"`
 	Watch  WatchConfig  `yaml:"watch"`
 	Review ReviewConfig `yaml:"review"`
+	// Notifications turns the desktop notifications prutil raises on and off.
+	// The settings pane writes it back, one value at a time.
+	Notifications NotificationConfig `yaml:"notifications"`
 	// Repos maps a repository in owner/name form to the local checkout path
 	// prutil should use for it.
 	Repos map[string]string `yaml:"repos"`
@@ -202,7 +205,8 @@ func DefaultConfig() Config {
 			Comment: defaultReviewComment(),
 			Repos:   map[string]string{},
 		},
-		Repos: map[string]string{},
+		Notifications: defaultNotifications(),
+		Repos:         map[string]string{},
 		Discovery: DiscoveryConfig{
 			Roots: []string{},
 		},
@@ -244,12 +248,16 @@ func (c *Config) clamp() {
 	if c.Review.Repos == nil {
 		c.Review.Repos = map[string]string{}
 	}
+	if c.Notifications.Events == nil {
+		c.Notifications.Events = map[NotificationEvent]bool{}
+	}
 
 	w := &c.Watch
 	floor := Duration(minPollInterval)
 	for _, d := range []*Duration{
 		&w.ActiveInterval, &w.BaseInterval, &w.MaxInterval,
 		&w.NotifiedInterval, &w.MaxNotifiedInterval,
+		&c.Notifications.Interval,
 	} {
 		if *d < floor {
 			*d = floor

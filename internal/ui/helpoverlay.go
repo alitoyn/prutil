@@ -343,7 +343,7 @@ func helpRows(matches []helpMatch, headings bool) ([]helpRow, []int) {
 func (a *App) helpLayout() helpLayout {
 	l := helpLayout{width: a.width}
 	room := a.height - overlayChrome
-	if a.width >= overlayFullWidth && a.height >= overlayFullHeight {
+	if a.floating() {
 		l.width = min(a.width-4, overlayMaxWidth)
 		room -= 2
 	}
@@ -361,45 +361,18 @@ func (a *App) helpLayout() helpLayout {
 	return l
 }
 
-// renderHelpOverlay draws the overlay over a finished screen. The screen
-// behind loses its colour, so the overlay reads as the thing in front, and
-// each overlay line is cut into the line it covers rather than composited,
-// which keeps the result exactly the size of the terminal.
+// renderHelpOverlay draws the overlay over a finished screen.
 func (a *App) renderHelpOverlay(base []string) []string {
 	l := a.helpLayout()
-	box := a.helpBox(l)
-	dim := a.styles.Backdrop
-
-	out := make([]string, a.height)
-	for y := range out {
-		line := ""
-		if y < len(base) {
-			line = ansi.Strip(base[y])
-		}
-		line = padTo(line, a.width)
-
-		i := y - l.y
-		if i < 0 || i >= len(box) {
-			out[y] = dim.Render(ansi.Cut(line, 0, a.width))
-			continue
-		}
-		out[y] = dim.Render(ansi.Cut(line, 0, l.x)) +
-			ansi.Truncate(box[i], max(a.width-l.x, 0), "") +
-			dim.Render(ansi.Cut(line, l.x+l.width, a.width))
-	}
-	return out
+	return a.floatOver(base, a.helpBox(l), l.x, l.y, l.width)
 }
 
 // helpBox draws the overlay itself, frame and all, as l.height lines of
 // l.width columns.
 func (a *App) helpBox(l helpLayout) []string {
 	o := &a.overlay
-	border := a.styles.OverlayBorder
-	side := border.Render("│")
-	row := func(content string) string {
-		return side + " " + padTo(ansi.Truncate(content, l.inner, ellipsis), l.inner) + " " + side
-	}
-	rule := border.Render("├" + strings.Repeat("─", max(l.width-2, 0)) + "┤")
+	row := func(content string) string { return a.frameRow(content, l.inner) }
+	rule := a.frameRule(l.width)
 
 	count := a.styles.Muted.Render(fmt.Sprintf("%d/%d", len(o.matches), o.total))
 	box := make([]string, 0, l.height)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/relloyd/prutil/internal/browser"
 	"github.com/relloyd/prutil/internal/clipboard"
+	"github.com/relloyd/prutil/internal/desktop"
 	"github.com/relloyd/prutil/internal/gh"
 	"github.com/relloyd/prutil/internal/home"
 	"github.com/relloyd/prutil/internal/model"
@@ -171,6 +173,10 @@ type Config struct {
 	// disables the handoff key; HandoffErr says why.
 	Handoff    dispatcher
 	HandoffErr error
+	// Notifier shows desktop notifications. Nil turns them off, which is what
+	// a test wants unless it is testing them: the alternative is toasts on the
+	// screen of whoever runs the tests.
+	Notifier desktop.Notifier
 	// NoMouse leaves mouse reporting off. Asking for it takes the wheel and
 	// drag-to-select away from the terminal, which is a trade somebody reading
 	// URLs and error text off the screen may not want to make.
@@ -218,6 +224,8 @@ type App struct {
 	status string
 	// overlay is the ? shortcut list, drawn over everything else while open.
 	overlay helpOverlay
+	// settings is the s pane, drawn over everything else while open.
+	settings settingsPane
 
 	// gen is bumped on every refresh; replies carrying an older generation are
 	// discarded so a slow request cannot overwrite fresher data.
@@ -258,6 +266,14 @@ type App struct {
 	// runtime is what the app knows about each pull request beyond the list
 	// row itself. See prRuntime.
 	runtime map[model.Key]*prRuntime
+
+	// notifier shows desktop notifications, when there is one.
+	notifier desktop.Notifier
+	// notifyPending is whether a wait or a read for notifications is under
+	// way, of which there is only ever one; notifyErr is how the last read
+	// failed, for the settings pane to report.
+	notifyPending bool
+	notifyErr     error
 }
 
 // prRuntime is everything the watcher knows about one pull request: what is
@@ -286,6 +302,11 @@ type prRuntime struct {
 	history handoffHistoryState
 	headOID string
 	rollup  model.Status
+	// facts is the last reading a desktop notification would be raised on,
+	// factsAt when it was asked for, and hasFacts whether there has been one.
+	facts    prFacts
+	factsAt  time.Time
+	hasFacts bool
 }
 
 // runtimeOf reads the runtime state for one pull request. A pull request
@@ -303,8 +324,8 @@ func (a *App) runtimeOf(key model.Key) prRuntime {
 // There is no matching removal. An entry outlives the work that created it on
 // purpose: the activity log is what the reader reads afterwards, and a history
 // read that came back empty is worth remembering, since asking again would
-// find the same nothing. The map is bounded by the pull requests the reader
-// touched in one session.
+// find the same nothing. The map is bounded by the pull requests one session
+// has seen in the open list, since each gets its notification facts here.
 func (a *App) mutate(key model.Key) *prRuntime {
 	if got, ok := a.runtime[key]; ok {
 		return got
@@ -351,6 +372,11 @@ func New(cfg Config) *App {
 		handErr = errors.New("herdr is not configured")
 	}
 
+	// The settings pane changes the notification settings in place, so the
+	// app takes a map of its own rather than writing into its caller's.
+	homeCfg := cfg.Home
+	homeCfg.Notifications.Events = maps.Clone(cfg.Home.Notifications.Events)
+
 	a := &App{
 		client:   cfg.Client,
 		opener:   cfg.Opener,
@@ -368,13 +394,14 @@ func New(cfg Config) *App {
 		store:    cfg.Store,
 		state:    state,
 		storeErr: storeErr,
-		homeCfg:  cfg.Home,
+		homeCfg:  homeCfg,
 		homeNote: joinNotes(cfg.HomeNotes),
 		hand:     cfg.Handoff,
 		handErr:  handErr,
 		engine:   watch.New(cfg.Home.Watch),
 		runtime:  map[model.Key]*prRuntime{},
 		mouse:    !cfg.NoMouse,
+		notifier: cfg.Notifier,
 	}
 	a.views[viewOpen].loading = true
 	return a
@@ -407,6 +434,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Everything else, the replies from GitHub included, carries on as usual.
 	if a.overlay.open {
 		if cmd, handled := a.updateHelpOverlay(msg); handled {
+			return a, cmd
+		}
+	}
+	if a.settings.open {
+		if cmd, handled := a.updateSettings(msg); handled {
 			return a, cmd
 		}
 	}
@@ -466,20 +498,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.applyPRs(msg.view, msg.prs, msg.unavailable)
 		watching := a.watchAfterLoad(msg.view)
+		notices := a.noticeAfterLoad(msg)
 		history := a.loadSelectedHandoffHistory()
 		if msg.partial {
 			// The sweep's first page is on screen and already interactive;
 			// the rest is filled in behind it without blocking the reader.
 			a.views[msg.view].enriching = true
-			return a, tea.Batch(watching, history, a.loadClosedFinish(msg.gen, msg.sweepState))
+			return a, tea.Batch(watching, notices, history, a.loadClosedFinish(msg.gen, msg.sweepState))
 		}
 		a.views[msg.view].enriching = false
 		if msg.view != a.active {
 			// A background view finished loading; leave the visible one alone
 			// and warm its checks only once the reader switches to it.
-			return a, tea.Batch(watching, history)
+			return a, tea.Batch(watching, notices, history)
 		}
-		return a, tea.Batch(watching, history, a.withSpinner(tea.Batch(a.prefetch()...)))
+		return a, tea.Batch(watching, notices, history, a.withSpinner(tea.Batch(a.prefetch()...)))
 
 	case errMsg:
 		if msg.gen != a.gen {
@@ -581,6 +614,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.clampScroll()
 		return a, nil
 
+	case notifyTickMsg:
+		return a, a.pollNotifications()
+
+	case notifyPollMsg:
+		return a, a.applyNotifyPoll(msg)
+
+	case settingsTestMsg:
+		return a, a.applySettingsTest(msg)
+
 	case triggerReviewMsg:
 		entry := a.mutate(msg.key)
 		entry.requestingReview = false
@@ -618,6 +660,10 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, a.keys.Help):
 		return a, a.openHelp()
+
+	case key.Matches(msg, a.keys.Settings):
+		a.openSettings()
+		return a, nil
 
 	case key.Matches(msg, a.keys.Refresh):
 		return a, a.refresh("refreshing…")
@@ -1042,7 +1088,7 @@ func (a *App) load(v view) tea.Cmd {
 
 // loadOpen fetches the open pull request list.
 func (a *App) loadOpen(gen int) tea.Cmd {
-	client, query, limit := a.client, a.query, a.limit
+	client, query, limit, at := a.client, a.query, a.limit, a.now()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
@@ -1050,8 +1096,18 @@ func (a *App) loadOpen(gen int) tea.Cmd {
 		if err != nil {
 			return errMsg{gen: gen, view: viewOpen, err: err}
 		}
-		return prsMsg{gen: gen, view: viewOpen, prs: prs}
+		return prsMsg{gen: gen, view: viewOpen, prs: prs, at: at}
 	}
+}
+
+// noticeAfterLoad compares a freshly loaded open list with what was last read,
+// and makes sure the notification reads are running now there is a list to
+// read.
+func (a *App) noticeAfterLoad(msg prsMsg) tea.Cmd {
+	if msg.view != viewOpen {
+		return nil
+	}
+	return tea.Batch(a.notice(readingsOfPRs(msg.prs, msg.at)), a.scheduleNotifications())
 }
 
 // loadClosed fetches the first page of the recently closed sweep and returns
@@ -1364,6 +1420,9 @@ type (
 		view        view
 		prs         []model.PullRequest
 		unavailable int
+		// at is when the open list was asked for, which is what orders it
+		// against the other readings a notification is raised on.
+		at time.Time
 		// partial marks a closed-view reply that is only the sweep's first
 		// page. The rows apply immediately; sweepState carries what
 		// FinishClosedPullRequests needs to fetch the rest in the background.

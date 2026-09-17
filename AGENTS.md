@@ -42,6 +42,7 @@ checks.
 | `internal/gh` | the `Client` interface and its gh-CLI implementation, the GraphQL documents, and wire decoding |
 | `internal/browser` | the `Opener` interface and the platform handler |
 | `internal/clipboard` | the `Writer` interface and the platform clipboard program |
+| `internal/desktop` | the `Notifier` interface and the platform notification program |
 | `internal/git` | reading the repository and branch behind a directory, and finding a repository's local checkout |
 | `internal/herdr` | the `Controller` interface and the herdr CLI behind it |
 | `internal/handoff` | choosing the agent a pull request's feedback goes to, and sending it |
@@ -66,11 +67,13 @@ list query that force it to walk `contexts`.
 
 ## Conventions
 
-- **Tests never touch the network, and never the real clipboard.** `gh.Runner`,
-  `browser.Opener` and `clipboard.Writer` are the seams; fake them. GraphQL
-  fixtures live in `internal/gh/testdata`. `ui.New` falls back to the real
-  clipboard when `Config.Clipboard` is empty, so a test that presses `y` must
-  build its app through `newTestApp`, or pass a `fakeClipboard` of its own.
+- **Tests never touch the network, never the real clipboard, and never raise a
+  real notification.** `gh.Runner`, `browser.Opener`, `clipboard.Writer` and
+  `desktop.Notifier` are the seams; fake them. GraphQL fixtures live in
+  `internal/gh/testdata`. `ui.New` falls back to the real clipboard when
+  `Config.Clipboard` is empty, so a test that presses `y` must build its app
+  through `newTestApp`, or pass a `fakeClipboard` of its own. It does the
+  opposite with `Config.Notifier`: empty means no notifications at all.
 - Use testify's `assert` and `require`, table-driven where the cases are
   uniform, and give each case a sentence-long name.
 - All colour lives in `internal/ui/styles.go`. All key bindings live in
@@ -88,7 +91,10 @@ list query that force it to walk `contexts`.
   that key must be one `handleKey` matches. While the overlay is open, `Update`
   hands it key, paste and mouse messages before anything else; its own keys
   live in `overlayKeyMap`, apart from `keyMap`, because `q` must reach the
-  filter.
+  filter. The `s` settings pane (`internal/ui/settings.go`) takes input the
+  same way while open, with its own `settingsKeyMap`, and both panes float
+  over the screen through `floatOver` in `internal/ui/frame.go`.
+- The footer has no room for `s settings`; it is reachable through `?`.
 - Tests must not run a `tea.Tick` command. `drain` calls the command, so
   draining one blocks for the whole interval. Send the message the tick would
   have produced instead, the way the `selectionMsg` and `autoRefreshMsg` tests
@@ -239,6 +245,27 @@ the compact section packs onto one line what the expanded page gives a line
 each. Rendering goes through `watchRow`, plain text and a style, so counting
 the page is counting a slice; the scroll arithmetic asks on every key press.
 
+## Desktop notifications
+
+`notifications` in `internal/ui/notify.go` is the one list of what prutil can
+notify about: the settings pane's row and explanation, the notification's
+wording, and the rule that recognises the change. Each rule compares two
+`prFacts`, which `prRuntime` holds per pull request. Adding a notification
+means a `home.NotificationEvent` with its default, an entry in that list, and
+whatever fact the rule needs; a test fails when the two lists disagree. A fact
+that needs a new field must come from `listQuery` and `watchQuery` alike, and
+`watchQuery` still has to stay cheap.
+
+Readings come from three places: the open list loading, the watcher's
+snapshots, and a poll of every open pull request that runs only while a
+notification is on (`scheduleNotifications`; `notifyPending` keeps it to one
+wait or request at a time). Every reading is stamped with when it was asked for,
+and `App.notice` ignores one older than what it holds, or a slow list load
+could undo an approval a poll had already seen and have it announced twice. The
+first reading of a pull request is a baseline and never announced. Readings are
+recorded even while every notification is off, so turning one on does not
+announce old news.
+
 ## The application directory
 
 `home.Load` degrades and cannot fail. A configuration that will not parse
@@ -251,6 +278,14 @@ reaches the reader on the footer's notice line and stays there.
 `git.NewResolver` absorbs a nil store in both its shapes, the plain nil
 interface and a nil `*home.Store` inside one. The second is the trap: it passes
 an ordinary nil check and then dereferences a nil receiver.
+
+Apart from the first-run template, the settings pane is the only thing that
+writes `config.yaml`, and `Store.SetNotification` changes one value by editing the text in place
+(`setScalar` in `internal/home/yamledit.go`), then reads the result back and
+refuses to write anything that differs by more than that value. Do not replace
+it with a decode and re-encode: yaml.v3 drops blank lines and moves comments,
+in a file the reader wrote by hand. The file is resolved through symbolic links
+before it is replaced, so a dotfiles-managed link stays a link.
 
 ## Things to avoid
 

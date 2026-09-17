@@ -84,6 +84,7 @@ func TestListPullRequestsDecodesSearchResults(t *testing.T) {
 	assert.Equal(t, "main", first.BaseRef)
 	assert.Equal(t, model.MergeClean, first.Mergeable)
 	assert.Equal(t, model.ReviewApproved, first.ReviewDecision)
+	assert.Equal(t, 2, first.Approvals)
 	assert.Equal(t, model.StatusSuccess, first.Rollup)
 	assert.Equal(t, 120, first.Additions)
 	assert.Equal(t, 30, first.Deletions)
@@ -693,8 +694,25 @@ func TestWatchSnapshotCoversEveryPullRequestInOneRequest(t *testing.T) {
 	assert.Equal(t, 6, first.Threads)
 	assert.Equal(t, time.Date(2026, 9, 9, 16, 35, 21, 0, time.UTC), first.UpdatedAt)
 
+	assert.Equal(t, model.ReviewRequired, first.ReviewDecision)
+	assert.Equal(t, 1, first.Approvals)
+	assert.False(t, first.Approved(), "the repository's rules want more than the one approval it has")
+
 	assert.Equal(t, model.StatusUnknown, snaps[1].Rollup, "a head commit with no rollup is not busy")
 	assert.False(t, snaps[1].Busy())
+	assert.Equal(t, model.ReviewNone, snaps[1].ReviewDecision)
+	assert.True(t, snaps[1].Approved(), "without review rules, an approval is the only sign there is")
+}
+
+func TestWatchSnapshotReadsWhereEachPullRequestStandsWithItsReviewers(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{fixture(t, "watch_nodes.json")}}
+	client := gh.New(runner, 1)
+
+	_, err := client.WatchSnapshot(context.Background(), []string{"PR_42"})
+	require.NoError(t, err)
+	assert.Contains(t, runner.argsOf(0), "reviewDecision")
+	assert.Contains(t, runner.argsOf(0), "approvals: reviews(states: [APPROVED]) { totalCount }",
+		"only the count is read: the reviews themselves would cost a point per page")
 }
 
 func TestWatchSnapshotPassesTheIdsAsAJsonArray(t *testing.T) {
