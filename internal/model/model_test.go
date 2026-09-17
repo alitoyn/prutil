@@ -569,3 +569,16 @@ func TestSelfReviewModeTreatsAllViewerCommentsAsFeedbackUnlessAgentReplied(t *te
 	thread.Resolved = true
 	assert.False(t, thread.NeedsAttention(rfSelfReview), "resolved thread is ignored even in self-review mode")
 }
+
+func TestSelfReviewModeWaitsForTheViewerToSubmitAComment(t *testing.T) {
+	thread := model.ReviewThread{
+		LatestBy:      "relloyd",
+		LatestBody:    "Please fix this before submitting the review.",
+		LatestPending: true,
+	}
+
+	assert.False(t, thread.NeedsAttention(model.ReviewFilter{
+		Viewer:     "relloyd",
+		SelfReview: true,
+	}), "a pending review draft is not feedback until it is submitted")
+}

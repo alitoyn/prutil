@@ -656,6 +656,17 @@ func TestReviewThreadsSelectsOnlyWhatIsStillWaitingOnTheViewer(t *testing.T) {
 		"the resolved thread and the one the viewer answered themselves are both finished with")
 }
 
+func TestReviewThreadsDoesNotTreatPendingViewerDraftAsSelfReviewFeedback(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{fixture(t, "review_threads_pending.json")}}
+	client := gh.New(runner, 1)
+
+	review, err := client.ReviewThreads(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 42})
+	require.NoError(t, err)
+	assert.Len(t, review.Threads, 1)
+	assert.Empty(t, review.Feedback(model.ReviewFilter{SelfReview: true}),
+		"an unpublished review draft must wait until it is submitted")
+}
+
 func TestReviewThreadsAdmitsWhenAPullRequestHasMoreThanOnePageOfThem(t *testing.T) {
 	runner := &fakeRunner{responses: [][]byte{[]byte(
 		`{"data":{"viewer":{"login":"relloyd"},"repository":{"pullRequest":{"reviewThreads":{"totalCount":150,"nodes":[]}}}}}`,

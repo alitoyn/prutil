@@ -28,6 +28,7 @@
                     "url": "https://github.com/relloyd/prutil/pull/42#discussion_r9",
                     "author": { "login": "reviewer" },
                     "createdAt": "2026-09-02T10:00:00Z",
+                    "publishedAt": "2026-09-02T10:00:00Z",
                     "body": "Please retry this."
                   }
                 ]
@@ -54,7 +55,8 @@
                     "id": "PRRC_2",
                     "url": "https://github.com/relloyd/prutil/pull/42#discussion_r2",
                     "author": { "login": "reviewer" },
-                    "createdAt": "2026-09-01T09:05:00Z"
+                    "createdAt": "2026-09-01T09:05:00Z",
+                    "publishedAt": "2026-09-01T09:05:00Z"
                   }
                 ]
               }
@@ -80,7 +82,8 @@
                     "id": "PRRC_7",
                     "url": "https://github.com/relloyd/prutil/pull/42#discussion_r7",
                     "author": { "login": "relloyd" },
-                    "createdAt": "2026-09-02T11:00:00Z"
+                    "createdAt": "2026-09-02T11:00:00Z",
+                    "publishedAt": "2026-09-02T11:00:00Z"
                   }
                 ]
               }

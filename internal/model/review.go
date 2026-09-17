@@ -72,6 +72,9 @@ type ReviewThread struct {
 	LatestID   string
 	LatestAt   time.Time
 	LatestBody string
+	// LatestPending is true when GitHub has not published the newest comment
+	// from its review draft yet.
+	LatestPending bool
 
 	// Comments is how many comments the thread holds.
 	Comments int
@@ -95,6 +98,9 @@ type ReviewFilter struct {
 // or their latest comment carries filter.Marker.
 func (t ReviewThread) NeedsAttention(filter ReviewFilter) bool {
 	if t.Resolved {
+		return false
+	}
+	if t.LatestPending {
 		return false
 	}
 	if t.agentAnswered(filter.Viewer) {
