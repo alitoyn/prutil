@@ -61,6 +61,21 @@ func TestEveryNotificationHasOneEntryInTheSettings(t *testing.T) {
 		"the settings list every notification home knows about, once and in the same order")
 }
 
+func TestTheSettingsPaneShowsEveryNotificationWordForWord(t *testing.T) {
+	// The pane draws allSettings, so a notification missing from it, or worded
+	// differently there, is one the reader cannot reach or cannot recognise.
+	rows := make(map[string]settingItem, len(allSettings))
+	for _, item := range allSettings {
+		rows[item.setting] = item
+	}
+	for _, n := range notifications {
+		item, ok := rows[n.setting]
+		require.True(t, ok, "the settings pane has no row for the %q notification", n.setting)
+		assert.Equal(t, n.detail, item.detail,
+			"the pane explains %q differently from the notification itself", n.setting)
+	}
+}
+
 func TestSOpensTheSettingsAndEscClosesThem(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
 	focus, cursor := app.focus, app.cur().cursor
@@ -167,7 +182,7 @@ func TestSpaceTurnsSelfReviewOnAndSavesIt(t *testing.T) {
 
 	send(t, app, press("j"))
 	assert.Equal(t, 1, app.settings.cursor)
-	assert.Contains(t, plain(app.render()), "Treat all unresolved review comments")
+	assert.Contains(t, plain(app.render()), "Treat every unresolved review comment")
 
 	send(t, app, press("space"))
 	assert.True(t, app.homeCfg.Watch.SelfReview)

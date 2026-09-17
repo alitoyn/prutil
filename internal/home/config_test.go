@@ -142,3 +142,10 @@ func TestTheWrittenTemplateNamesSelfReview(t *testing.T) {
 	tmpl := string(home.DefaultConfigTemplate())
 	assert.Contains(t, tmpl, "self_review: false")
 }
+
+func TestThePromptTellsTheAgentToWriteTheMarkerTheWatcherReads(t *testing.T) {
+	// The prompt is the only thing that makes an agent's reply recognisable
+	// later, so the string it asks for has to be the string model looks for.
+	assert.Contains(t, home.DefaultPrompt, model.AgentCommentMarker)
+	assert.Contains(t, string(home.DefaultConfigTemplate()), model.AgentCommentMarker)
+}

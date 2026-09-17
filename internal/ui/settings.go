@@ -30,31 +30,69 @@ const (
 	settingsChrome = 3
 )
 
-// settingItem is one toggleable setting in the s pane.
+// settingItem is one toggleable setting in the s pane. enabled reads it, set
+// applies it in memory and saves it, and after runs once it has, returning
+// anything else the reader should know and any work the change starts.
+//
+// The behaviour hangs off the item rather than off a kind, so a setting that
+// is neither a notification nor a watch option costs an entry in allSettings
+// and nothing else.
 type settingItem struct {
 	section string
 	setting string
 	detail  string
-	event   home.NotificationEvent
-	isWatch bool
+	enabled func(a *App) bool
+	set     func(a *App, on bool) error
+	after   func(a *App, on bool) (warning string, cmd tea.Cmd)
 }
 
-// allSettings lists every setting prutil can change for itself in the pane.
-var allSettings = []settingItem{
-	{
-		section: "DESKTOP NOTIFICATIONS",
-		setting: "Pull request approved",
-		detail: "When one of your open pull requests is approved: its review decision turns to approved or, " +
-			"in a repository without review rules, it gets its first approval.",
-		event: home.NotifyApproved,
-	},
-	{
+// allSettings lists every setting prutil can change for itself in the pane. The
+// notification rows are built from notifications, which stays the one list of
+// what prutil can notify about, so a new notification appears here by itself.
+var allSettings = buildSettings()
+
+func buildSettings() []settingItem {
+	out := make([]settingItem, 0, len(notifications)+1)
+	for _, n := range notifications {
+		out = append(out, settingItem{
+			section: "DESKTOP NOTIFICATIONS",
+			setting: n.setting,
+			detail:  n.detail,
+			enabled: func(a *App) bool { return a.homeCfg.Notifications.Enabled(n.event) },
+			set: func(a *App, on bool) error {
+				a.homeCfg.Notifications.Set(n.event, on)
+				if a.store == nil {
+					return a.storeErr
+				}
+				return a.store.SetNotification(n.event, on)
+			},
+			after: func(a *App, on bool) (string, tea.Cmd) {
+				warning := ""
+				if on {
+					warning = a.settings.unavailable
+				}
+				// Starts the reads when this was the first notification turned
+				// on. The last one turned off ends them at the next wake-up,
+				// with no request.
+				return warning, a.scheduleNotifications()
+			},
+		})
+	}
+
+	return append(out, settingItem{
 		section: "WATCHING",
 		setting: "Self-review feedback",
-		detail: "Treat all unresolved review comments written from your account as actionable feedback for coding agents, " +
-			"as long as they are not automated agent comments.",
-		isWatch: true,
-	},
+		detail: "Treat every unresolved review comment written from your account as actionable feedback for " +
+			"coding agents, apart from the replies your agents left behind.",
+		enabled: func(a *App) bool { return a.homeCfg.Watch.SelfReview },
+		set: func(a *App, on bool) error {
+			a.homeCfg.Watch.SelfReview = on
+			if a.store == nil {
+				return a.storeErr
+			}
+			return a.store.SetWatchSelfReview(on)
+		},
+	})
 }
 
 // settingsRow is one line inside the window: either a section header or a setting.
@@ -237,55 +275,27 @@ func (a *App) clampSettingsScroll() {
 // they just asked for, for as long as this prutil runs.
 func (a *App) toggleSetting() tea.Cmd {
 	item := allSettings[a.settings.cursor]
-	if item.isWatch {
-		on := !a.homeCfg.Watch.SelfReview
-		a.homeCfg.Watch.SelfReview = on
-		state := "off"
-		if on {
-			state = "on"
-		}
-		if err := a.saveWatchSelfReview(on); err != nil {
-			a.settings.setNotice(fmt.Sprintf("%s is %s until prutil quits, but was not saved: %s", item.setting, state, err), true)
-		} else {
-			a.settings.setNotice(fmt.Sprintf("%s is %s · saved", item.setting, state), false)
-		}
-		return nil
-	}
+	on := !item.enabled(a)
+	err := item.set(a, on)
 
-	on := !a.homeCfg.Notifications.Enabled(item.event)
-	a.homeCfg.Notifications.Set(item.event, on)
+	warning, cmd := "", tea.Cmd(nil)
+	if item.after != nil {
+		warning, cmd = item.after(a, on)
+	}
 
 	state := "off"
 	if on {
 		state = "on"
 	}
-	switch err := a.saveNotification(item.event, on); {
+	switch {
 	case err != nil:
 		a.settings.setNotice(fmt.Sprintf("%s is %s until prutil quits, but was not saved: %s", item.setting, state, err), true)
-	case on && a.settings.unavailable != "":
-		a.settings.setNotice(fmt.Sprintf("%s is on and saved, but nothing will appear: %s", item.setting, a.settings.unavailable), true)
+	case warning != "":
+		a.settings.setNotice(fmt.Sprintf("%s is on and saved, but nothing will appear: %s", item.setting, warning), true)
 	default:
 		a.settings.setNotice(fmt.Sprintf("%s is %s · saved", item.setting, state), false)
 	}
-	// Starts the reads when this was the first notification turned on. The
-	// last one turned off ends them at the next wake-up, with no request.
-	return a.scheduleNotifications()
-}
-
-// saveNotification writes one setting to the configuration file.
-func (a *App) saveNotification(event home.NotificationEvent, on bool) error {
-	if a.store == nil {
-		return a.storeErr
-	}
-	return a.store.SetNotification(event, on)
-}
-
-// saveWatchSelfReview writes the self_review setting to the configuration file.
-func (a *App) saveWatchSelfReview(on bool) error {
-	if a.store == nil {
-		return a.storeErr
-	}
-	return a.store.SetWatchSelfReview(on)
+	return cmd
 }
 
 // setNotice replaces what the pane says about the last thing it did.
@@ -421,20 +431,13 @@ func (a *App) settingLine(item settingItem, selected bool, width int) string {
 		prefix, titleStyle = a.styles.SelectBar.Render("▌")+" ", a.styles.Title
 	}
 	box, state, stateStyle := "[ ]", "off", a.styles.Muted
-	if a.settingEnabled(item) {
+	if item.enabled(a) {
 		box, state, stateStyle = "[✓]", "on", a.styles.Success
 	}
 
 	room := max(width-2-lenOf(box)-1, 1)
 	title := titleStyle.Render(truncatePlain(item.setting, max(room-lenOf(state)-2, 1)))
 	return prefix + stateStyle.Render(box) + " " + justify(room, title, stateStyle.Render(state))
-}
-
-func (a *App) settingEnabled(item settingItem) bool {
-	if item.isWatch {
-		return a.homeCfg.Watch.SelfReview
-	}
-	return a.homeCfg.Notifications.Enabled(item.event)
 }
 
 // settingsNotice is what the notice lines say, in order of what matters: what

@@ -16,6 +16,11 @@ import (
 // slash command is how a Claude Code skill is asked for by name. Without one
 // it spells the job out, so the feature works before anybody has written a
 // skill for it.
+//
+// It asks for model.AgentCommentMarker on every reply, which is the only thing
+// that makes the reply recognisable as the agent's own later. Without it the
+// watcher reads the answer as fresh feedback and sends the same work round
+// again.
 const DefaultPrompt = `{{if .Skill}}/{{.Skill}} {{.URL}}{{else}}` +
 	`Triage the review feedback on {{.Repo}}#{{.Number}}: {{.URL}}
 
@@ -23,14 +28,9 @@ It is {{.HeadRef}} into {{.BaseRef}}, with {{.UnresolvedCount}} unresolved revie
 	`{{if eq .UnresolvedCount 1}}thread{{else}}threads{{end}}. Read each one, make the ` +
 	`changes that should be made, and reply on the threads you are leaving alone saying why.
 
-When replying on review threads:
-1. Start with the blockquote line:
-> automated AI response
-
-2. Put a blank line after it so subsequent lines are not formatted as blockquotes.
-3. Include a tracking tag at the end of the comment:
-<!-- prutil:agent commit:<COMMIT_SHA> -->
-(replace <COMMIT_SHA> with the commit SHA of your changes, or HEAD if no commit was made).` +
+End every reply you leave on a review thread with this line on its own, which is how
+prutil knows the reply is yours and not new feedback for you:
+` + model.AgentCommentMarker +
 	`{{end}}{{if .Note}}
 
 {{.Note}}{{end}}`

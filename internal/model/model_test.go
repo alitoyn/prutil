@@ -450,29 +450,29 @@ func TestIsAgentCommentIdentifiesAutomatedReplies(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "html tracking comment with commit tag",
-			body: "Fixed the bug.\n<!-- prutil:agent commit:a1b2c3d -->",
+			name: "the tracking tag at the end of a reply",
+			body: "Fixed the bug.\n<!-- prutil:agent -->",
 			want: true,
 		},
 		{
-			name: "html tracking comment without commit tag",
+			name: "the tracking tag on its own line above the reply",
 			body: "<!-- prutil:agent -->\nAutomated reply",
 			want: true,
 		},
 		{
-			name: "standard automated response header",
+			name: "an automated response header is prose, not provenance",
 			body: "> automated response from prutil/herdr\n\nI have addressed the comments.",
-			want: true,
+			want: false,
 		},
 		{
-			name: "automated AI response header",
+			name: "an automated AI response header is prose, not provenance",
 			body: "> automated AI response\n\nFixed in commit 12345.",
-			want: true,
+			want: false,
 		},
 		{
-			name: "generic automated response header",
+			name: "a quoted automated response a reviewer typed is not an agent comment",
 			body: "> automated response\n\nHere are the details.",
-			want: true,
+			want: false,
 		},
 		{
 			name: "ordinary human review comment",
@@ -484,53 +484,16 @@ func TestIsAgentCommentIdentifiesAutomatedReplies(t *testing.T) {
 			body: "Please test this.\n<!-- prutil:test -->",
 			want: false,
 		},
+		{
+			name: "a longer word starting with the tag is a different tag",
+			body: "<!-- prutil:agentic-review -->\nNot ours.",
+			want: false,
+		},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, model.IsAgentComment(tt.body))
-		})
-	}
-}
-
-func TestExtractAgentCommitReadsCommitHashFromTrackingTag(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want string
-	}{
-		{
-			name: "short commit SHA",
-			body: "Fixed in a1b2c3d\n<!-- prutil:agent commit:a1b2c3d -->",
-			want: "a1b2c3d",
-		},
-		{
-			name: "full 40-character commit SHA",
-			body: "Fixed in <!-- prutil:agent commit:4d87e846215c563deac715cc3175174c1ab194c4 -->",
-			want: "4d87e846215c563deac715cc3175174c1ab194c4",
-		},
-		{
-			name: "variant with agent subtype",
-			body: "<!-- prutil:agent:reply commit:c0ffee1 -->\nDone.",
-			want: "c0ffee1",
-		},
-		{
-			name: "tag without commit SHA",
-			body: "<!-- prutil:agent -->\nDone.",
-			want: "",
-		},
-		{
-			name: "no tag",
-			body: "Ordinary comment text",
-			want: "",
-		},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, model.ExtractAgentCommit(tt.body))
-			thread := model.ReviewThread{LatestBody: tt.body}
-			assert.Equal(t, tt.want, thread.AgentCommit())
 		})
 	}
 }
@@ -549,19 +512,32 @@ func TestAgentReplyStopsMarkedThreadFromTriggeringSecondHandoff(t *testing.T) {
 	assert.True(t, thread.NeedsAttention(rf),
 		"opening self-test comment needs attention")
 
-	// 2. Agent replies with tracking tag and commit.
-	agentReply := "> automated AI response\n\nFixed in commit a1b2c3d.\n<!-- prutil:agent commit:a1b2c3d -->"
-	thread.LatestBody = agentReply
+	// 2. The viewer's agent replies, carrying the tracking tag.
+	thread.LatestBody = "Fixed in a1b2c3d.\n" + model.AgentCommentMarker
 	thread.Comments = 2
 	assert.False(t, thread.NeedsAttention(rf),
 		"agent reply must not re-trigger attention (loop prevented)")
-	assert.Equal(t, "a1b2c3d", thread.AgentCommit())
 
 	// 3. User replies with a follow-up test comment.
 	thread.LatestBody = "Please also update the test.\n" + model.DefaultSelfTestMarker
 	thread.Comments = 3
 	assert.True(t, thread.NeedsAttention(rf),
 		"human follow-up comment needs attention again")
+}
+
+func TestAnotherPersonsAgentMarkerDoesNotSilenceAThread(t *testing.T) {
+	// The marker says "an agent of mine wrote this". A reviewer writing it,
+	// deliberately or by quoting one, must not take their own feedback off a
+	// reader's watcher.
+	thread := model.ReviewThread{
+		Opener:     "reviewer",
+		Body:       "This leaks a file handle.",
+		LatestBy:   "reviewer",
+		LatestBody: "This leaks a file handle.\n" + model.AgentCommentMarker,
+	}
+
+	assert.True(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "relloyd"}),
+		"the marker was not in a comment the viewer wrote")
 }
 
 func TestSelfReviewModeTreatsAllViewerCommentsAsFeedbackUnlessAgentReplied(t *testing.T) {
@@ -580,7 +556,7 @@ func TestSelfReviewModeTreatsAllViewerCommentsAsFeedbackUnlessAgentReplied(t *te
 	assert.True(t, thread.NeedsAttention(rfSelfReview), "self-review mode treats viewer comment as actionable")
 
 	// 2. Agent replies with tracking tag.
-	thread.LatestBody = "> automated AI response\n\nRefactored in 4f8b21a.\n<!-- prutil:agent commit:4f8b21a -->"
+	thread.LatestBody = "Refactored in 4f8b21a.\n" + model.AgentCommentMarker
 	thread.Comments = 2
 	assert.False(t, thread.NeedsAttention(rfSelfReview), "agent reply is ignored even in self-review mode")
 
