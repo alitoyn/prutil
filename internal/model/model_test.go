@@ -277,19 +277,20 @@ func threads() []model.ReviewThread {
 
 func TestAThreadNeedsAttentionUntilItIsResolvedOrTheViewerHasTheLastWord(t *testing.T) {
 	all := threads()
-	assert.True(t, all[0].NeedsAttention("relloyd", model.DefaultSelfTestMarker))
-	assert.False(t, all[1].NeedsAttention("relloyd", model.DefaultSelfTestMarker), "the viewer already answered it")
-	assert.False(t, all[2].NeedsAttention("relloyd", model.DefaultSelfTestMarker), "resolved is finished with")
-	assert.True(t, all[3].NeedsAttention("relloyd", model.DefaultSelfTestMarker), "outdated lines may still hide an unanswered point")
+	rf := model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker}
+	assert.True(t, all[0].NeedsAttention(rf))
+	assert.False(t, all[1].NeedsAttention(rf), "the viewer already answered it")
+	assert.False(t, all[2].NeedsAttention(rf), "resolved is finished with")
+	assert.True(t, all[3].NeedsAttention(rf), "outdated lines may still hide an unanswered point")
 }
 
 func TestAThreadNeedsAttentionWhoeverTheViewerIsWhenThereIsNoViewer(t *testing.T) {
-	assert.True(t, model.ReviewThread{LatestBy: "relloyd"}.NeedsAttention("", model.DefaultSelfTestMarker),
+	assert.True(t, model.ReviewThread{LatestBy: "relloyd"}.NeedsAttention(model.ReviewFilter{Viewer: "", Marker: model.DefaultSelfTestMarker}),
 		"without a login prutil cannot rule a thread out, so it does not")
 }
 
 func TestTheViewerLoginIsMatchedWithoutRegardToCase(t *testing.T) {
-	assert.False(t, model.ReviewThread{LatestBy: "RelLoyd"}.NeedsAttention("relloyd", model.DefaultSelfTestMarker))
+	assert.False(t, model.ReviewThread{LatestBy: "RelLoyd"}.NeedsAttention(model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker}))
 }
 
 func TestSelfAuthoredTestMarkerMakesAnUnresolvedThreadEligible(t *testing.T) {
@@ -345,13 +346,13 @@ func TestSelfAuthoredTestMarkerMakesAnUnresolvedThreadEligible(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.thread.NeedsAttention("relloyd", model.DefaultSelfTestMarker))
+			assert.Equal(t, tt.want, tt.thread.NeedsAttention(model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker}))
 		})
 	}
 }
 
 func TestFeedbackKeepsOnlyWhatIsStillWaitingAndInOrder(t *testing.T) {
-	got := model.Feedback(threads(), "relloyd", model.DefaultSelfTestMarker)
+	got := model.Feedback(threads(), model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker})
 	require.Len(t, got, 2)
 	assert.Equal(t, "T1", got[0].ID)
 	assert.Equal(t, "T4", got[1].ID)
@@ -388,9 +389,9 @@ func TestAnEmptyMarkerTurnsTheSelfTestExceptionOff(t *testing.T) {
 		LatestBody: "a note " + model.DefaultSelfTestMarker,
 	}
 
-	assert.True(t, thread.NeedsAttention("me", model.DefaultSelfTestMarker), "marked and mine")
-	assert.False(t, thread.NeedsAttention("me", ""), "no marker configured, so no exception")
-	assert.False(t, thread.NeedsAttention("me", "<!-- other -->"), "a different marker is not this one")
+	assert.True(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "me", Marker: model.DefaultSelfTestMarker}), "marked and mine")
+	assert.False(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "me", Marker: ""}), "no marker configured, so no exception")
+	assert.False(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "me", Marker: "<!-- other -->"}), "a different marker is not this one")
 }
 
 func TestAnotherPersonsMarkerChangesNothing(t *testing.T) {
@@ -402,7 +403,7 @@ func TestAnotherPersonsMarkerChangesNothing(t *testing.T) {
 		LatestBody: "answered",
 	}
 
-	assert.False(t, thread.NeedsAttention("me", model.DefaultSelfTestMarker),
+	assert.False(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "me", Marker: model.DefaultSelfTestMarker}),
 		"the marker was not in a comment the viewer wrote")
 }
 
@@ -440,4 +441,144 @@ func TestASnapshotMovesWhenTheReviewersDo(t *testing.T) {
 	assert.True(t, approved.Moved(base), "a new approval is a change")
 
 	assert.False(t, base.Moved(base))
+}
+
+func TestIsAgentCommentIdentifiesAutomatedReplies(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "the tracking tag at the end of a reply",
+			body: "Fixed the bug.\n<!-- prutil:agent -->",
+			want: true,
+		},
+		{
+			name: "the tracking tag on its own line above the reply",
+			body: "<!-- prutil:agent -->\nAutomated reply",
+			want: true,
+		},
+		{
+			name: "an automated response header is prose, not provenance",
+			body: "> automated response from prutil/herdr\n\nI have addressed the comments.",
+			want: false,
+		},
+		{
+			name: "an automated AI response header is prose, not provenance",
+			body: "> automated AI response\n\nFixed in commit 12345.",
+			want: false,
+		},
+		{
+			name: "a quoted automated response a reviewer typed is not an agent comment",
+			body: "> automated response\n\nHere are the details.",
+			want: false,
+		},
+		{
+			name: "ordinary human review comment",
+			body: "Please update this function to handle nil pointers.",
+			want: false,
+		},
+		{
+			name: "self-test comment without agent tag",
+			body: "Please test this.\n<!-- prutil:test -->",
+			want: false,
+		},
+		{
+			name: "a longer word starting with the tag is a different tag",
+			body: "<!-- prutil:agentic-review -->\nNot ours.",
+			want: false,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, model.IsAgentComment(tt.body))
+		})
+	}
+}
+
+func TestAgentReplyStopsMarkedThreadFromTriggeringSecondHandoff(t *testing.T) {
+	rf := model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker}
+
+	// 1. Thread opened by viewer with self-test marker.
+	thread := model.ReviewThread{
+		Opener:     "relloyd",
+		Body:       "Please test this.\n" + model.DefaultSelfTestMarker,
+		LatestBy:   "relloyd",
+		LatestBody: "Please test this.\n" + model.DefaultSelfTestMarker,
+		Comments:   1,
+	}
+	assert.True(t, thread.NeedsAttention(rf),
+		"opening self-test comment needs attention")
+
+	// 2. The viewer's agent replies, carrying the tracking tag.
+	thread.LatestBody = "Fixed in a1b2c3d.\n" + model.AgentCommentMarker
+	thread.Comments = 2
+	assert.False(t, thread.NeedsAttention(rf),
+		"agent reply must not re-trigger attention (loop prevented)")
+
+	// 3. User replies with a follow-up test comment.
+	thread.LatestBody = "Please also update the test.\n" + model.DefaultSelfTestMarker
+	thread.Comments = 3
+	assert.True(t, thread.NeedsAttention(rf),
+		"human follow-up comment needs attention again")
+}
+
+func TestAnotherPersonsAgentMarkerDoesNotSilenceAThread(t *testing.T) {
+	// The marker says "an agent of mine wrote this". A reviewer writing it,
+	// deliberately or by quoting one, must not take their own feedback off a
+	// reader's watcher.
+	thread := model.ReviewThread{
+		Opener:     "reviewer",
+		Body:       "This leaks a file handle.",
+		LatestBy:   "reviewer",
+		LatestBody: "This leaks a file handle.\n" + model.AgentCommentMarker,
+	}
+
+	assert.True(t, thread.NeedsAttention(model.ReviewFilter{Viewer: "relloyd"}),
+		"the marker was not in a comment the viewer wrote")
+}
+
+func TestSelfReviewModeTreatsAllViewerCommentsAsFeedbackUnlessAgentReplied(t *testing.T) {
+	rfSelfReview := model.ReviewFilter{Viewer: "relloyd", SelfReview: true}
+	rfStandard := model.ReviewFilter{Viewer: "relloyd", SelfReview: false}
+
+	// 1. Thread opened by viewer with regular comment (NO marker).
+	thread := model.ReviewThread{
+		Opener:     "relloyd",
+		Body:       "Please refactor this method to avoid allocations.",
+		LatestBy:   "relloyd",
+		LatestBody: "Please refactor this method to avoid allocations.",
+		Comments:   1,
+	}
+	assert.False(t, thread.NeedsAttention(rfStandard), "standard mode ignores viewer's unmarked comment")
+	assert.True(t, thread.NeedsAttention(rfSelfReview), "self-review mode treats viewer comment as actionable")
+
+	// 2. Agent replies with tracking tag.
+	thread.LatestBody = "Refactored in 4f8b21a.\n" + model.AgentCommentMarker
+	thread.Comments = 2
+	assert.False(t, thread.NeedsAttention(rfSelfReview), "agent reply is ignored even in self-review mode")
+
+	// 3. Human leaves a new unmarked follow-up reply.
+	thread.LatestBody = "Thanks, also benchmark this against the old version."
+	thread.Comments = 3
+	assert.True(t, thread.NeedsAttention(rfSelfReview), "new human reply in self-review mode needs attention again")
+
+	// 4. Thread is resolved on GitHub.
+	thread.Resolved = true
+	assert.False(t, thread.NeedsAttention(rfSelfReview), "resolved thread is ignored even in self-review mode")
+}
+
+func TestSelfReviewModeWaitsForTheViewerToSubmitAComment(t *testing.T) {
+	thread := model.ReviewThread{
+		LatestBy:      "relloyd",
+		LatestBody:    "Please fix this before submitting the review.",
+		LatestPending: true,
+	}
+
+	assert.False(t, thread.NeedsAttention(model.ReviewFilter{
+		Viewer:     "relloyd",
+		SelfReview: true,
+	}), "a pending review draft is not feedback until it is submitted")
 }

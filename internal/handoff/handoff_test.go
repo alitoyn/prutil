@@ -301,7 +301,7 @@ func TestTheAgentOnTheHeadBranchIsPreferredOverOneMerelyInTheRepository(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, home.OutcomeSent, res.Outcome)
 	assert.Equal(t, []string{"w3:p1"}, control.prompted)
-	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42", control.texts[0])
+	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42\n\n"+home.MarkerInstruction, control.texts[0])
 }
 
 func TestAManualHandoffWithoutAnAgentRequiresAConfiguredKindBeforeProvisioning(t *testing.T) {
@@ -553,7 +553,7 @@ func TestADryRunRendersThePromptWithoutSendingIt(t *testing.T) {
 	res, err := dispatcher.Dispatch(context.Background(), request())
 	require.NoError(t, err)
 	assert.Equal(t, home.OutcomeDryRun, res.Outcome)
-	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42", res.Prompt)
+	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42\n\n"+home.MarkerInstruction, res.Prompt)
 	assert.Empty(t, control.prompted, "a dry run sends nothing")
 }
 

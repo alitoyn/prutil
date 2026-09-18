@@ -939,7 +939,10 @@ func (a *App) settingLine(item settingDescriptor, selected bool, width int) stri
 		prefix, titleStyle = a.styles.SelectBar.Render("▌")+" ", a.styles.Title
 	}
 
-	box, state, stateStyle := "   ", item.getDisplay(a), a.styles.Accent
+	box, state, stateStyle := "   ", "", a.styles.Accent
+	if item.getDisplay != nil {
+		state = item.getDisplay(a)
+	}
 	if item.kind == settingKindBool {
 		if item.isEnabled != nil && item.isEnabled(a) {
 			box, state, stateStyle = "[✓]", "on", a.styles.Success
@@ -1016,6 +1019,7 @@ func (a *App) settingsHints() string {
 	pairs := []key.Help{
 		{Key: k.Up.Help().Key + k.Down.Help().Key, Desc: "select"},
 		k.Toggle.Help(),
+		k.Test.Help(),
 		k.Default.Help(),
 		k.NextSec.Help(),
 		k.Close.Help(),

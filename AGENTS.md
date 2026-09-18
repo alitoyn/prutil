@@ -212,6 +212,25 @@ only reschedules what it has a reading for, so anything else stays due at a
 time already past and the schedule computes a zero delay, which is a request
 loop.
 
+`model.ReviewFilter` decides what counts as feedback, and both its markers
+answer only for a comment the viewer wrote. `DefaultSelfTestMarker` opts a
+thread in, `AgentCommentMarker` opts one out, and neither is honoured in
+somebody else's comment: a reviewer who could write either would be choosing
+what a reader's watcher does. Both read the thread's newest comment alone, so a
+thread that has been replied to since falls off the list rather than being
+handed over for as long as it stays open.
+
+Do not recognise an agent's reply by its prose. `AgentCommentMarker` is the
+only thing that answers, because "automated response" is a phrase a reviewer
+can type and a thread that matched it would take itself off the list by
+accident. The marker gets onto a reply through the prompt, so `RenderPrompt` appends
+`home.MarkerInstruction` to any prompt that renders without it. That is the
+whole guarantee: `config.yaml` is written once and never rewritten, so an
+installation predating the marker keeps a prompt that never asks for it, and a
+prompt naming a `herdr.skill` is a slash command that says nothing about
+replies. Leave that in the mechanism rather than in the text a reader owns;
+`TestEveryRenderedPromptAsksForTheMarker` pins it.
+
 `handoff.pick` matches an agent to a pull request on what git says about its
 checkout, never on how its branch name looks: prutil's own workspace branch,
 a branch that tracks or is named after the pull request's head, or a checkout
@@ -255,6 +274,14 @@ means a `home.NotificationEvent` with its default, an entry in that list, and
 whatever fact the rule needs; a test fails when the two lists disagree. A fact
 that needs a new field must come from `listQuery` and `watchQuery` alike, and
 `watchQuery` still has to stay cheap.
+
+The `s` pane draws `allSettings` in `internal/ui/settings.go`, whose
+notification rows are built from `notifications` rather than written out beside
+it, so a new notification reaches the pane by itself. Each entry carries its
+own `enabled`, `set` and `after` funcs; a setting that is neither a
+notification nor a watch option costs an entry and nothing else. Do not give
+`settingItem` a field naming its kind: the branch that field buys reappears in
+every place the pane touches a setting.
 
 Readings come from three places: the open list loading, the watcher's
 snapshots, and a poll of every open pull request that runs only while a

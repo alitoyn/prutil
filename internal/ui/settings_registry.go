@@ -204,6 +204,36 @@ func allSettings() []settingDescriptor {
 		// WATCHING & POLLING
 		// ---------------------------------------------------------------------
 		{
+			id:      "watch.self_review",
+			section: "WATCHING & POLLING",
+			title:   "Self-review feedback",
+			detail: "Treat every unresolved review comment written from your account as actionable feedback for " +
+				"coding agents, apart from the replies your agents left behind.",
+			kind: settingKindBool,
+			isEnabled: func(a *App) bool {
+				return a.homeCfg.Watch.SelfReview
+			},
+			toggle: func(a *App) tea.Cmd {
+				on := !a.homeCfg.Watch.SelfReview
+				a.homeCfg.Watch.SelfReview = on
+				if a.store != nil {
+					_ = a.store.SetWatchSelfReview(on)
+				}
+				state := onOff(on)
+				a.settings.setNotice(fmt.Sprintf("Self-review feedback is %s · saved", state), false)
+				return a.rereadArmedReviews()
+			},
+			reset: func(a *App) error {
+				a.homeCfg.Watch.SelfReview = false
+				if a.store != nil {
+					return a.store.ResetSetting([]string{"watch", "self_review"}, func(c *home.Config) {
+						c.Watch.SelfReview = false
+					})
+				}
+				return nil
+			},
+		},
+		{
 			id:           "watch.active_interval",
 			section:      "WATCHING & POLLING",
 			title:        "Active poll interval",
@@ -1287,4 +1317,12 @@ func allSettings() []settingDescriptor {
 			},
 		},
 	}
+}
+
+// onOff returns "on" for true and "off" for false.
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }

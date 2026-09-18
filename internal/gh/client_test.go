@@ -637,7 +637,7 @@ func TestReviewThreadsAdmitsAMarkerInTheViewersLatestReply(t *testing.T) {
 	assert.Equal(t, "relloyd", thread.LatestBy)
 	assert.Equal(t, "PRRC_MARKED_REPLY", thread.LatestID)
 	assert.Contains(t, thread.LatestBody, model.DefaultSelfTestMarker)
-	require.Len(t, review.Feedback(model.DefaultSelfTestMarker), 1,
+	require.Len(t, review.Feedback(model.ReviewFilter{Marker: model.DefaultSelfTestMarker}), 1,
 		"an unresolved thread with a marked latest reply is test feedback")
 	assert.Contains(t, runner.argsOf(0), "createdAt body",
 		"the precise query requests the latest comment body")
@@ -650,10 +650,21 @@ func TestReviewThreadsSelectsOnlyWhatIsStillWaitingOnTheViewer(t *testing.T) {
 	review, err := client.ReviewThreads(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 42})
 	require.NoError(t, err)
 
-	feedback := review.Feedback(model.DefaultSelfTestMarker)
+	feedback := review.Feedback(model.ReviewFilter{Marker: model.DefaultSelfTestMarker})
 	require.Len(t, feedback, 1)
 	assert.Equal(t, "PRRT_1", feedback[0].ID,
 		"the resolved thread and the one the viewer answered themselves are both finished with")
+}
+
+func TestReviewThreadsDoesNotTreatPendingViewerDraftAsSelfReviewFeedback(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{fixture(t, "review_threads_pending.json")}}
+	client := gh.New(runner, 1)
+
+	review, err := client.ReviewThreads(context.Background(), model.Key{Repo: "relloyd/prutil", Number: 42})
+	require.NoError(t, err)
+	assert.Len(t, review.Threads, 1)
+	assert.Empty(t, review.Feedback(model.ReviewFilter{SelfReview: true}),
+		"an unpublished review draft must wait until it is submitted")
 }
 
 func TestReviewThreadsAdmitsWhenAPullRequestHasMoreThanOnePageOfThem(t *testing.T) {

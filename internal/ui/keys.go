@@ -234,7 +234,7 @@ func (k keyMap) helpSections(mouse bool) []helpSection {
 		}},
 		{title: "General", entries: []helpEntry{
 			{binding: k.Settings, title: "settings",
-				detail: "Choose which pull request changes raise a desktop notification. Each change is saved to the configuration file as it is made."},
+				detail: "View and toggle prutil settings, including desktop notifications and self-review mode. Each change is saved to the configuration file as it is made."},
 			{binding: k.Help, title: "keyboard shortcuts",
 				detail: "Open this list. Type to filter, enter to run the highlighted shortcut, esc to close."},
 			{binding: k.Quit, title: "quit",
@@ -430,7 +430,7 @@ func defaultSettingsKeys() settingsKeyMap {
 		),
 		Test: key.NewBinding(
 			key.WithKeys("t"),
-			key.WithHelp("t", "test"),
+			key.WithHelp("t", "test notification"),
 		),
 		Up: key.NewBinding(
 			key.WithKeys("up", "k", "ctrl+p"),

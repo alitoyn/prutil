@@ -180,6 +180,35 @@ func TestSetNotificationWritesThroughASymbolicLink(t *testing.T) {
 	assert.Len(t, entries, 1, "no temporary file is left beside the real one")
 }
 
+func TestSetNotificationPreservesSelfReviewAndOtherCustomWatchFields(t *testing.T) {
+	store := home.OpenIn(t.TempDir())
+	written := "watch:\n  self_review: true\n  self_test_marker: \"<!-- prutil:test -->\"\n"
+	writeConfig(t, store, written, 0o600)
+
+	require.NoError(t, store.SetNotification(home.NotifyApproved, false))
+	cfg, err := store.LoadConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.Watch.SelfReview)
+	assert.Equal(t, "<!-- prutil:test -->", cfg.Watch.Marker())
+	assert.False(t, cfg.Notifications.Enabled(home.NotifyApproved))
+}
+
+func TestSetWatchSelfReviewCanToggleAndPreservesConfig(t *testing.T) {
+	store := home.OpenIn(t.TempDir())
+	_, err := store.LoadOrCreateConfig()
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetWatchSelfReview(true))
+	cfg, err := store.LoadConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.Watch.SelfReview)
+
+	require.NoError(t, store.SetWatchSelfReview(false))
+	cfg, err = store.LoadConfig()
+	require.NoError(t, err)
+	assert.False(t, cfg.Watch.SelfReview)
+}
+
 func writeConfig(t *testing.T, store *home.Store, text string, perm os.FileMode) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(store.Path(home.ConfigFile), []byte(text), perm))

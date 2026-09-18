@@ -147,6 +147,14 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 	})
 }
 
+// SetWatchSelfReview writes the watch.self_review setting into config.yaml,
+// and nothing else.
+func (s *Store) SetWatchSelfReview(on bool) error {
+	return s.SaveSetting([]string{"watch", "self_review"}, strconv.FormatBool(on), func(c *Config) {
+		c.Watch.SelfReview = on
+	})
+}
+
 // dotted writes a configuration path the way the documentation does.
 func dotted(path []string) string { return strings.Join(path, ".") }
 

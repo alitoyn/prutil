@@ -6,16 +6,36 @@ import (
 )
 
 // DefaultSelfTestMarker opts an unresolved code-review thread into watcher
-// feedback when the authenticated viewer placed it in the opening comment or
-// their latest reply. It is an HTML comment so the marker adds no visible
-// noise to a pull request's rendered discussion.
+// feedback when the authenticated viewer placed it in the thread's newest
+// comment. It is an HTML comment so the marker adds no visible noise to a pull
+// request's rendered discussion.
 //
-// It only ever answers for a comment the viewer wrote themselves, so nobody
-// else can use it to change what a reader's watcher does. It exists so that
-// the watcher can be tried against a real pull request without waiting for
-// somebody to review it. The marker is configurable, and setting it to the
-// empty string turns the behaviour off; see home.WatchConfig.
+// It answers for the newest comment alone, so that a thread the agent or the
+// viewer has since replied to falls off the list rather than being handed over
+// for as long as it stays open. It only ever answers for a comment the viewer
+// wrote themselves, so nobody else can use it to change what a reader's
+// watcher does. It exists so that the watcher can be tried against a real pull
+// request without waiting for somebody to review it. The marker is
+// configurable, and setting it to the empty string turns the behaviour off;
+// see home.WatchConfig.
 const DefaultSelfTestMarker = "<!-- prutil:test -->"
+
+// AgentCommentMarker identifies a review reply an agent posted on the viewer's
+// behalf, so that answering feedback does not read as fresh feedback and send
+// the same work round again. It is an HTML comment, so it adds no visible noise
+// to a pull request's rendered discussion, and the agent is told to write it by
+// the prompt in home.DefaultPrompt.
+const AgentCommentMarker = "<!-- prutil:agent -->"
+
+// IsAgentComment reports whether a comment carries the tracking tag an agent
+// writing on the viewer's behalf leaves behind.
+//
+// Only the tag answers. Prose such as "automated response" is something a
+// reviewer can type, and matching on it would let an ordinary comment take
+// itself off the feedback list by accident.
+func IsAgentComment(body string) bool {
+	return strings.Contains(body, AgentCommentMarker)
+}
 
 // ReviewThread is one conversation attached to a pull request, as GitHub's
 // review UI groups them: a first comment on a line of the diff and every reply
@@ -52,42 +72,92 @@ type ReviewThread struct {
 	LatestID   string
 	LatestAt   time.Time
 	LatestBody string
+	// LatestPending is true when GitHub has not published the newest comment
+	// from its review draft yet.
+	LatestPending bool
 
 	// Comments is how many comments the thread holds.
 	Comments int
 }
 
+// ReviewFilter configures how review threads are filtered for watcher feedback.
+type ReviewFilter struct {
+	// Viewer is the authenticated login name of the viewer.
+	Viewer string
+	// Marker is the optional HTML comment marker for self-test comments.
+	Marker string
+	// SelfReview treats all unresolved review comments written by the viewer
+	// as actionable feedback, as long as they are not automated agent comments.
+	SelfReview bool
+}
+
 // NeedsAttention reports whether a thread is feedback still waiting on viewer.
-// A resolved thread is finished, and a thread whose last word is the viewer's
-// own has already been answered by them unless one of their own comments in it
-// carries marker. An empty marker turns that exception off.
-func (t ReviewThread) NeedsAttention(viewer, marker string) bool {
+// A resolved thread is finished. A thread whose newest comment is an agent
+// reply of the viewer's own has already been answered. A thread whose last word
+// is the viewer's own is otherwise answered unless filter.SelfReview is enabled
+// or their latest comment carries filter.Marker.
+func (t ReviewThread) NeedsAttention(filter ReviewFilter) bool {
 	if t.Resolved {
 		return false
 	}
-	return viewer == "" ||
-		!strings.EqualFold(t.LatestBy, viewer) ||
-		t.selfTestComment(viewer, marker)
+	if t.LatestPending {
+		return false
+	}
+	if t.agentAnswered(filter.Viewer) {
+		return false
+	}
+	if filter.Viewer == "" || !strings.EqualFold(t.LatestBy, filter.Viewer) {
+		return true
+	}
+	if filter.SelfReview {
+		return true
+	}
+	return t.selfTestComment(filter.Viewer, filter.Marker)
+}
+
+// agentAnswered reports whether the thread's newest comment is an agent reply
+// posted under the viewer's own account.
+//
+// The author check is what keeps the marker from being a thing somebody else
+// can do to a reader's watcher: a reviewer writing it, deliberately or by
+// quoting an agent that did, must not take their own feedback off the list.
+func (t ReviewThread) agentAnswered(viewer string) bool {
+	if viewer == "" {
+		return false
+	}
+	latest, by := t.LatestBody, t.LatestBy
+	if latest == "" {
+		latest, by = t.Body, t.Opener
+	}
+	return strings.EqualFold(by, viewer) && IsAgentComment(latest)
 }
 
 // selfTestComment recognises an explicit watcher test only when the current
-// viewer wrote the marked comment. A marker from another reviewer must not
-// change the ordinary last-author rule, which is what keeps this from being a
-// thing somebody else can do to a reader's watcher.
+// viewer wrote the latest comment carrying marker. Checking only the latest
+// comment prevents a thread from remaining permanently open once an agent or
+// the viewer replies.
 func (t ReviewThread) selfTestComment(viewer, marker string) bool {
 	if viewer == "" || marker == "" {
 		return false
 	}
-	return (strings.EqualFold(t.Opener, viewer) && strings.Contains(t.Body, marker)) ||
-		(strings.EqualFold(t.LatestBy, viewer) && strings.Contains(t.LatestBody, marker))
+	if !strings.EqualFold(t.LatestBy, viewer) {
+		return false
+	}
+	if strings.Contains(t.LatestBody, marker) {
+		return true
+	}
+	if t.LatestBody == "" && strings.EqualFold(t.Opener, viewer) && strings.Contains(t.Body, marker) {
+		return true
+	}
+	return false
 }
 
 // Feedback selects the threads still waiting on viewer, keeping the order they
 // arrived in.
-func Feedback(threads []ReviewThread, viewer, marker string) []ReviewThread {
+func Feedback(threads []ReviewThread, filter ReviewFilter) []ReviewThread {
 	out := make([]ReviewThread, 0, len(threads))
 	for _, thread := range threads {
-		if thread.NeedsAttention(viewer, marker) {
+		if thread.NeedsAttention(filter) {
 			out = append(out, thread)
 		}
 	}
