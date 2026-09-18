@@ -553,3 +553,98 @@ func TestSettingsSubPaneMapAndSequence(t *testing.T) {
 	send(t, app, press("esc"))
 	assert.Equal(t, settingsModeNormal, app.settings.mode)
 }
+
+func TestSettingsTemplateViewerAndEditor(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+
+	promptIdx := -1
+	for i, it := range allSettings() {
+		if it.id == "herdr.prompt" {
+			promptIdx = i
+			break
+		}
+	}
+	require.True(t, promptIdx >= 0)
+	app.settings.cursor = promptIdx
+
+	// Press enter to view template modal
+	send(t, app, press("enter"))
+	assert.Equal(t, settingsModeTemplate, app.settings.mode)
+
+	// Render screen in template mode
+	screen := plain(app.render())
+	assert.Contains(t, screen, "Template: Review handoff prompt")
+	assert.Contains(t, screen, "1 │")
+	assert.Contains(t, screen, "edit in $EDITOR")
+
+	// Scroll down and up
+	send(t, app, press("down"))
+	assert.Equal(t, 1, app.settings.templateScroll)
+	send(t, app, press("up"))
+	assert.Equal(t, 0, app.settings.templateScroll)
+
+	// Simulate editor return with updated template
+	tmpFile, err := os.CreateTemp("", "test-tmpl-*.tmpl")
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_, err = tmpFile.WriteString("Custom template for {{.Repo}}#{{.Number}}: {{.URL}}\n" + model.AgentCommentMarker + "\n")
+	require.NoError(t, err)
+	_ = tmpFile.Close()
+
+	cmd := app.handleTemplateEditorFinished(templateEditorFinishedMsg{
+		tmpFile: tmpFile.Name(),
+		isCheck: false,
+		err:     nil,
+	})
+	assert.Nil(t, cmd)
+	assert.Contains(t, app.homeCfg.Herdr.Prompt, "Custom template for")
+	assert.Contains(t, app.settings.notice, "prompt template updated · saved")
+
+	// Render screen again to verify new template content is visible
+	screenAfter := plain(app.render())
+	assert.Contains(t, screenAfter, "Custom template for")
+
+	// Reset to default
+	send(t, app, press("d"))
+	assert.Equal(t, home.DefaultPrompt, app.homeCfg.Herdr.Prompt)
+	assert.Contains(t, app.settings.notice, "template reset to default · saved")
+
+	// Press esc to return to normal list
+	send(t, app, press("esc"))
+	assert.Equal(t, settingsModeNormal, app.settings.mode)
+}
+
+func TestSettingsSubPaneRendering(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+
+	// Jump to discovery.roots
+	send(t, app, press("G"))
+	assert.Equal(t, len(allSettings())-1, app.settings.cursor)
+
+	// Enter subpane
+	send(t, app, press("enter"))
+	assert.Equal(t, settingsModeSubPane, app.settings.mode)
+
+	// Render empty subpane screen
+	screen := plain(app.render())
+	assert.Contains(t, screen, "Discovery: Checkout Roots")
+	assert.Contains(t, screen, "no entries configured")
+
+	// Start adding
+	send(t, app, press("a"))
+	assert.True(t, app.settings.subPane.adding)
+	addScreen := plain(app.render())
+	assert.Contains(t, addScreen, "ADD NEW ENTRY")
+	assert.Contains(t, addScreen, "Root path:")
+
+	// Cancel adding
+	send(t, app, press("esc"))
+	assert.False(t, app.settings.subPane.adding)
+	assert.Equal(t, settingsModeSubPane, app.settings.mode)
+
+	// Return to normal mode
+	send(t, app, press("esc"))
+	assert.Equal(t, settingsModeNormal, app.settings.mode)
+}

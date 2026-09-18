@@ -59,6 +59,7 @@ const (
 type subPaneState struct {
 	kind      subPaneType
 	cursor    int
+	offset    int
 	adding    bool
 	editing   bool
 	keyInput  textinput.Model
@@ -235,7 +236,7 @@ func (a *App) handleNormalKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, keys.Toggle):
 		return a.handleToggleOrAction(item, msg)
 	case key.Matches(msg, keys.Edit):
-		return a.handleEditAction(item)
+		return a.handleEditAction(item, msg)
 	case key.Matches(msg, keys.CycleNext):
 		return a.handleStepOrCycle(item, 1)
 	case key.Matches(msg, keys.CyclePrev):
@@ -296,7 +297,7 @@ func (a *App) handleToggleOrAction(item settingDescriptor, msg tea.KeyPressMsg) 
 }
 
 // handleEditAction handles enter / e on setting items.
-func (a *App) handleEditAction(item settingDescriptor) tea.Cmd {
+func (a *App) handleEditAction(item settingDescriptor, msg tea.KeyPressMsg) tea.Cmd {
 	switch item.kind {
 	case settingKindBool:
 		if item.toggle != nil {
@@ -309,6 +310,9 @@ func (a *App) handleEditAction(item settingDescriptor) tea.Cmd {
 	case settingKindDuration, settingKindInt, settingKindString:
 		return a.startInlineEdit(item)
 	case settingKindTemplate:
+		if msg.String() == "e" {
+			return a.editTemplateInEditor(item.id == "herdr.check_prompt")
+		}
 		a.settings.mode = settingsModeTemplate
 		a.settings.templateScroll = 0
 		return nil
@@ -379,7 +383,7 @@ func (a *App) handleTemplateKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc", "q":
 		a.settings.mode = settingsModeNormal
 		return nil
-	case "e":
+	case "e", "enter":
 		return a.editTemplateInEditor(isCheck)
 	case "d":
 		if item.reset != nil {
@@ -406,14 +410,28 @@ func (a *App) editTemplateInEditor(isCheck bool) tea.Cmd {
 		editor = os.Getenv("VISUAL")
 	}
 	if editor == "" {
-		editor = "nano"
+		for _, name := range []string{"nano", "vim", "vi"} {
+			if path, err := exec.LookPath(name); err == nil {
+				editor = path
+				break
+			}
+		}
+	}
+	if editor == "" {
+		a.settings.setNotice("no editor found ($EDITOR is not set)", true)
+		return nil
 	}
 
 	content := a.homeCfg.Herdr.Prompt
 	prefix := "prutil-prompt-*.tmpl"
 	if isCheck {
 		content = a.homeCfg.Herdr.CheckPrompt
+		if content == "" {
+			content = home.DefaultCheckPrompt
+		}
 		prefix = "prutil-check-prompt-*.tmpl"
+	} else if content == "" {
+		content = home.DefaultPrompt
 	}
 
 	tmp, err := os.CreateTemp("", prefix)
@@ -657,11 +675,19 @@ func (a *App) subPaneEntries() []string {
 	sp := a.settings.subPane
 	switch sp.kind {
 	case subPaneRepos:
+		var res []string
 		keys := slices.Sorted(maps.Keys(a.homeCfg.Repos))
-		return keys
+		for _, k := range keys {
+			res = append(res, fmt.Sprintf("%s → %s", k, a.homeCfg.Repos[k]))
+		}
+		return res
 	case subPaneReviewRepos:
+		var res []string
 		keys := slices.Sorted(maps.Keys(a.homeCfg.Review.Repos))
-		return keys
+		for _, k := range keys {
+			res = append(res, fmt.Sprintf("%s → %s", k, a.homeCfg.Review.Repos[k]))
+		}
+		return res
 	case subPaneDiscoveryRoots:
 		return a.homeCfg.Discovery.Roots
 	}
@@ -671,23 +697,27 @@ func (a *App) subPaneEntries() []string {
 // deleteSubPaneEntry removes the selected item from map or sequence.
 func (a *App) deleteSubPaneEntry(entry string) tea.Cmd {
 	sp := &a.settings.subPane
+	key := entry
+	if k, _, found := strings.Cut(entry, " → "); found {
+		key = k
+	}
 	switch sp.kind {
 	case subPaneRepos:
-		delete(a.homeCfg.Repos, entry)
+		delete(a.homeCfg.Repos, key)
 		if a.store != nil {
-			_ = a.store.DeleteMapEntry([]string{"repos"}, entry, func(c *home.Config) {
-				delete(c.Repos, entry)
+			_ = a.store.DeleteMapEntry([]string{"repos"}, key, func(c *home.Config) {
+				delete(c.Repos, key)
 			})
 		}
-		a.settings.setNotice(fmt.Sprintf("Deleted repository path %q · saved", entry), false)
+		a.settings.setNotice(fmt.Sprintf("Deleted repository path %q · saved", key), false)
 	case subPaneReviewRepos:
-		delete(a.homeCfg.Review.Repos, entry)
+		delete(a.homeCfg.Review.Repos, key)
 		if a.store != nil {
-			_ = a.store.DeleteMapEntry([]string{"review", "repos"}, entry, func(c *home.Config) {
-				delete(c.Review.Repos, entry)
+			_ = a.store.DeleteMapEntry([]string{"review", "repos"}, key, func(c *home.Config) {
+				delete(c.Review.Repos, key)
 			})
 		}
-		a.settings.setNotice(fmt.Sprintf("Deleted review trigger for %q · saved", entry), false)
+		a.settings.setNotice(fmt.Sprintf("Deleted review trigger for %q · saved", key), false)
 	case subPaneDiscoveryRoots:
 		var roots []string
 		for _, r := range a.homeCfg.Discovery.Roots {
@@ -703,8 +733,8 @@ func (a *App) deleteSubPaneEntry(entry string) tea.Cmd {
 		}
 		a.settings.setNotice(fmt.Sprintf("Deleted discovery root %q · saved", entry), false)
 	}
-	if sp.cursor > 0 {
-		sp.cursor--
+	if sp.cursor > 0 && sp.cursor >= len(a.subPaneEntries()) {
+		sp.cursor = len(a.subPaneEntries()) - 1
 	}
 	return nil
 }
@@ -875,7 +905,198 @@ func (a *App) settingsLayout() settingsLayout {
 // renderSettings draws the pane over a finished screen.
 func (a *App) renderSettings(base []string) []string {
 	l := a.settingsLayout()
-	return a.floatOver(base, a.settingsBox(l), l.x, l.y, l.width)
+	var box []string
+	switch a.settings.mode {
+	case settingsModeTemplate:
+		box = a.templateBox(l)
+	case settingsModeSubPane:
+		box = a.subPaneBox(l)
+	default:
+		box = a.settingsBox(l)
+	}
+	return a.floatOver(base, box, l.x, l.y, l.width)
+}
+
+// templateBox renders the template preview modal.
+func (a *App) templateBox(l settingsLayout) []string {
+	s := &a.settings
+	items := allSettings()
+	item := items[s.cursor]
+	isCheck := item.id == "herdr.check_prompt"
+
+	title := "Template: " + item.title
+	box := make([]string, 0, l.height)
+	box = append(box,
+		a.edge(l.width, "╭", "╮", a.styles.OverlayTitle.Render(title), a.styles.Muted.Render(a.configLabel())),
+	)
+
+	content := a.homeCfg.Herdr.Prompt
+	if isCheck {
+		content = a.homeCfg.Herdr.CheckPrompt
+		if content == "" {
+			content = home.DefaultCheckPrompt
+		}
+	} else if content == "" {
+		content = home.DefaultPrompt
+	}
+
+	lines := strings.Split(content, "\n")
+	numLines := len(lines)
+	if s.templateScroll < 0 {
+		s.templateScroll = 0
+	}
+	if s.templateScroll >= numLines && numLines > 0 {
+		s.templateScroll = numLines - 1
+	}
+
+	for i := 0; i < l.window; i++ {
+		lineIdx := s.templateScroll + i
+		text := ""
+		if lineIdx < numLines {
+			lineNum := fmt.Sprintf("%2d │ ", lineIdx+1)
+			text = "  " + a.styles.Muted.Render(lineNum) + a.styles.Text.Render(lines[lineIdx])
+		}
+		box = append(box, a.frameRow(text, l.inner))
+	}
+
+	if l.detail {
+		box = append(box, a.frameRule(l.width))
+		detail := item.detail + " Press 'e' or 'enter' to launch your $EDITOR."
+		dLines := wrapLines(detail, l.inner, settingsDetailLines)
+		for i := 0; i < settingsDetailLines; i++ {
+			text := ""
+			if i < len(dLines) {
+				text = dLines[i]
+			}
+			box = append(box, a.frameRow(a.styles.Muted.Render(text), l.inner))
+		}
+	}
+
+	box = append(box, a.frameRule(l.width))
+	notice, style := a.settingsNotice()
+	nLines := wrapLines(notice, l.inner, l.noticeLines)
+	for i := 0; i < l.noticeLines; i++ {
+		line := ""
+		if i < len(nLines) {
+			line = style.Render(nLines[i])
+		}
+		box = append(box, a.frameRow(line, l.inner))
+	}
+
+	hints := a.styles.OverlayKey.Render("e") + " " + a.styles.Muted.Render("edit in $EDITOR") +
+		a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("d") + " " + a.styles.Muted.Render("default") +
+		a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("↑↓") + " " + a.styles.Muted.Render("scroll") +
+		a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("esc") + " " + a.styles.Muted.Render("back")
+
+	return append(box, a.edge(l.width, "╰", "╯", hints, ""))
+}
+
+// subPaneBox renders the modal for collections (repos, review.repos, discovery.roots).
+func (a *App) subPaneBox(l settingsLayout) []string {
+	sp := &a.settings.subPane
+	title := "Manage Items"
+	switch sp.kind {
+	case subPaneRepos:
+		title = "Repositories: Explicit Paths"
+	case subPaneReviewRepos:
+		title = "Review: Repository Overrides"
+	case subPaneDiscoveryRoots:
+		title = "Discovery: Checkout Roots"
+	}
+
+	box := make([]string, 0, l.height)
+	box = append(box,
+		a.edge(l.width, "╭", "╮", a.styles.OverlayTitle.Render(title), a.styles.Muted.Render(a.configLabel())),
+	)
+
+	if sp.adding {
+		box = append(box, a.frameRow("  "+a.styles.SectionHdr.Render("ADD NEW ENTRY"), l.inner))
+		if sp.kind == subPaneDiscoveryRoots {
+			prompt := "  Root path: " + sp.keyInput.View()
+			box = append(box, a.frameRow(prompt, l.inner))
+		} else {
+			p1 := "  Repo (owner/repo): " + sp.keyInput.View()
+			box = append(box, a.frameRow(p1, l.inner))
+			p2 := "  Value / Comment:   " + sp.valInput.View()
+			box = append(box, a.frameRow(p2, l.inner))
+		}
+		for i := len(box) - 1; i < l.window; i++ {
+			box = append(box, a.frameRow("", l.inner))
+		}
+	} else {
+		entries := a.subPaneEntries()
+		if len(entries) == 0 {
+			sp.cursor = 0
+			sp.offset = 0
+			box = append(box, a.frameRow("  "+a.styles.Muted.Render("(no entries configured — press 'a' to add)"), l.inner))
+			for i := 1; i < l.window; i++ {
+				box = append(box, a.frameRow("", l.inner))
+			}
+		} else {
+			if sp.cursor < 0 {
+				sp.cursor = 0
+			}
+			if sp.cursor >= len(entries) {
+				sp.cursor = len(entries) - 1
+			}
+			if sp.cursor < sp.offset {
+				sp.offset = sp.cursor
+			}
+			if sp.cursor >= sp.offset+l.window {
+				sp.offset = sp.cursor - l.window + 1
+			}
+			for i := 0; i < l.window; i++ {
+				idx := sp.offset + i
+				text := ""
+				if idx < len(entries) {
+					prefix, style := "  ", a.styles.Text
+					if idx == sp.cursor {
+						prefix, style = a.styles.SelectBar.Render("▌")+" ", a.styles.Title
+					}
+					text = prefix + style.Render(entries[idx])
+				}
+				box = append(box, a.frameRow(text, l.inner))
+			}
+		}
+	}
+
+	if l.detail {
+		box = append(box, a.frameRule(l.width))
+		detail := "Manage configured entries. Changes are saved immediately to config.yaml."
+		dLines := wrapLines(detail, l.inner, settingsDetailLines)
+		for i := 0; i < settingsDetailLines; i++ {
+			text := ""
+			if i < len(dLines) {
+				text = dLines[i]
+			}
+			box = append(box, a.frameRow(a.styles.Muted.Render(text), l.inner))
+		}
+	}
+
+	box = append(box, a.frameRule(l.width))
+	text, style := a.settingsNotice()
+	nLines := wrapLines(text, l.inner, l.noticeLines)
+	for i := 0; i < l.noticeLines; i++ {
+		line := ""
+		if i < len(nLines) {
+			line = style.Render(nLines[i])
+		}
+		box = append(box, a.frameRow(line, l.inner))
+	}
+
+	var hints string
+	if sp.adding {
+		hints = a.styles.OverlayKey.Render("enter") + " " + a.styles.Muted.Render("save") +
+			a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("tab") + " " + a.styles.Muted.Render("next field") +
+			a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("esc") + " " + a.styles.Muted.Render("cancel")
+	} else {
+		hints = a.styles.OverlayKey.Render("a") + " " + a.styles.Muted.Render("add") +
+			a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("d/x") + " " + a.styles.Muted.Render("delete") +
+			a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("↑↓") + " " + a.styles.Muted.Render("select") +
+			a.styles.Muted.Render(" · ") + a.styles.OverlayKey.Render("esc") + " " + a.styles.Muted.Render("back")
+	}
+
+	return append(box, a.edge(l.width, "╰", "╯", hints, ""))
 }
 
 // settingsBox draws the pane container and its content lines.
