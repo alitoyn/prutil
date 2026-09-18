@@ -61,10 +61,7 @@ func buildSettings() []settingItem {
 			enabled: func(a *App) bool { return a.homeCfg.Notifications.Enabled(n.event) },
 			set: func(a *App, on bool) error {
 				a.homeCfg.Notifications.Set(n.event, on)
-				if a.store == nil {
-					return a.storeErr
-				}
-				return a.store.SetNotification(n.event, on)
+				return a.save(func(s *home.Store) error { return s.SetNotification(n.event, on) })
 			},
 			after: func(a *App, on bool) (string, tea.Cmd) {
 				warning := ""
@@ -87,12 +84,27 @@ func buildSettings() []settingItem {
 		enabled: func(a *App) bool { return a.homeCfg.Watch.SelfReview },
 		set: func(a *App, on bool) error {
 			a.homeCfg.Watch.SelfReview = on
-			if a.store == nil {
-				return a.storeErr
-			}
-			return a.store.SetWatchSelfReview(on)
+			return a.save(func(s *home.Store) error { return s.SetWatchSelfReview(on) })
+		},
+		// The rule this changes is applied when review threads are read, so
+		// the feedback counts already on screen answer the question as it was
+		// asked before. Reading them again is the only thing that makes the
+		// setting mean anything before the next forced read.
+		after: func(a *App, _ bool) (string, tea.Cmd) {
+			return "", a.rereadArmedReviews()
 		},
 	})
+}
+
+// save writes one change to the configuration file, or says why it could not.
+// Every setting goes through here, so the one thing each of them would
+// otherwise have to remember - that there may be no store to write to - is
+// remembered in one place.
+func (a *App) save(write func(*home.Store) error) error {
+	if a.store == nil {
+		return a.storeErr
+	}
+	return write(a.store)
 }
 
 // settingsRow is one line inside the window: either a section header or a setting.
@@ -101,7 +113,13 @@ type settingsRow struct {
 	item    int
 }
 
-func settingsRows() ([]settingsRow, []int) {
+// settingsRowList is what the pane draws, section headings and settings
+// interleaved, and settingsRowOf is the row each setting sits on. Both follow
+// from allSettings and never change, so they are built once beside it rather
+// than on every frame and every key press.
+var settingsRowList, settingsRowOf = buildSettingsRows()
+
+func buildSettingsRows() ([]settingsRow, []int) {
 	rows := make([]settingsRow, 0, len(allSettings)+2)
 	rowOf := make([]int, len(allSettings))
 	lastSection := ""
@@ -226,12 +244,11 @@ func (a *App) clickSettings(msg tea.MouseClickMsg) tea.Cmd {
 	if msg.X < l.x || msg.X >= l.x+l.width || row < 0 || row >= l.window {
 		return nil
 	}
-	rows, _ := settingsRows()
 	index := a.settings.offset + row
-	if index >= len(rows) {
+	if index >= len(settingsRowList) {
 		return nil
 	}
-	item := rows[index].item
+	item := settingsRowList[index].item
 	if item < 0 {
 		return nil
 	}
@@ -257,13 +274,12 @@ func (a *App) clampSettingsScroll() {
 		s.cursor, s.offset = 0, 0
 		return
 	}
-	rows, rowOf := settingsRows()
 	window := a.settingsLayout().window
-	row := rowOf[s.cursor]
-	s.offset = clampOffset(s.offset, row, window, len(rows))
+	row := settingsRowOf[s.cursor]
+	s.offset = clampOffset(s.offset, row, window, len(settingsRowList))
 	// Scrolling up onto the first entry of a section brings its heading with
 	// it, so the reader is never shown an entry without knowing where it is.
-	if row > 0 && s.offset == row && rows[row-1].item < 0 && window > 1 {
+	if row > 0 && s.offset == row && settingsRowList[row-1].item < 0 && window > 1 {
 		s.offset = row - 1
 	}
 }
@@ -347,8 +363,7 @@ func (a *App) settingsLayout() settingsLayout {
 	}
 	l.inner = max(l.width-4, 1)
 
-	rows, _ := settingsRows()
-	totalRows := len(rows)
+	totalRows := len(settingsRowList)
 	fixed := func() int {
 		n := settingsChrome + l.noticeLines
 		if l.detail {
@@ -379,15 +394,14 @@ func (a *App) renderSettings(base []string) []string {
 // l.width columns.
 func (a *App) settingsBox(l settingsLayout) []string {
 	s := &a.settings
-	rows, _ := settingsRows()
 	box := make([]string, 0, l.height)
 	box = append(box,
 		a.edge(l.width, "╭", "╮", a.styles.OverlayTitle.Render("Settings"), a.styles.Muted.Render(a.configLabel())),
 	)
 	for i := 0; i < l.window; i++ {
 		line, index := "", s.offset+i
-		if index < len(rows) {
-			r := rows[index]
+		if index < len(settingsRowList) {
+			r := settingsRowList[index]
 			if r.item < 0 {
 				line = "  " + a.styles.SectionHdr.Render(r.heading)
 			} else {

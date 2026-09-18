@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/relloyd/prutil/internal/home"
+	"github.com/relloyd/prutil/internal/model"
 )
 
 // openSettingsPane presses s and checks the pane came up.
@@ -62,17 +63,24 @@ func TestEveryNotificationHasOneEntryInTheSettings(t *testing.T) {
 }
 
 func TestTheSettingsPaneShowsEveryNotificationWordForWord(t *testing.T) {
-	// The pane draws allSettings, so a notification missing from it, or worded
-	// differently there, is one the reader cannot reach or cannot recognise.
-	rows := make(map[string]settingItem, len(allSettings))
-	for _, item := range allSettings {
-		rows[item.setting] = item
-	}
+	// Asked of allSettings this could not fail, because the notification rows
+	// are built by copying these very strings out of notifications. The pane
+	// as drawn is the thing worth pinning: a notification that never reaches a
+	// row is one the reader cannot reach either.
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+	screen := plain(app.render())
+
 	for _, n := range notifications {
-		item, ok := rows[n.setting]
-		require.True(t, ok, "the settings pane has no row for the %q notification", n.setting)
-		assert.Equal(t, n.detail, item.detail,
-			"the pane explains %q differently from the notification itself", n.setting)
+		assert.Contains(t, screen, n.setting,
+			"the settings pane draws no row for the %q notification", n.setting)
+	}
+	// The selected row's explanation is drawn beneath the list, and it is the
+	// notification's own words that belong there, wrapped to the box.
+	l := app.settingsLayout()
+	for _, line := range wrapLines(notifications[app.settings.cursor].detail, l.inner, settingsDetailLines) {
+		assert.Contains(t, screen, line,
+			"the pane explains the selected notification in words of its own")
 	}
 }
 
@@ -200,6 +208,39 @@ func TestSpaceTurnsSelfReviewOnAndSavesIt(t *testing.T) {
 	saved, err = app.store.LoadConfig()
 	require.NoError(t, err)
 	assert.False(t, saved.Watch.SelfReview)
+}
+
+func TestTogglingSelfReviewReadsTheWatchedPullRequestsAgain(t *testing.T) {
+	// Nothing on GitHub changes when this setting does, so no tripwire will
+	// ever ask about it: without a read of its own the counts on screen keep
+	// answering the question as it was asked before.
+	app, client, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	require.True(t, app.armed(model.Key{Repo: "relloyd/prutil", Number: 42}))
+	before := client.reviewCalls
+
+	openSettingsPane(t, app)
+	send(t, app, press("j"))
+	pump(t, app, send(t, app, press("space")))
+
+	assert.Equal(t, before+1, client.reviewCalls, "the armed pull request is read again")
+
+	// Turning it off asks again, because the count it leaves behind was
+	// computed under the rule that has just been dropped.
+	pump(t, app, send(t, app, press("space")))
+	assert.Equal(t, before+2, client.reviewCalls)
+}
+
+func TestTogglingANotificationLeavesTheWatcherAlone(t *testing.T) {
+	// Only the settings that change what feedback means are worth a request.
+	app, client, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	before := client.reviewCalls
+
+	openSettingsPane(t, app)
+	pump(t, app, send(t, app, press("space")))
+
+	assert.Equal(t, before, client.reviewCalls)
 }
 
 func TestTheSettingsDoNotWriteIntoTheCallersConfiguration(t *testing.T) {

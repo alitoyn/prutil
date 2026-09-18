@@ -296,6 +296,35 @@ func snapshotFor(snaps []model.Snapshot, key model.Key) (model.Snapshot, bool) {
 	return model.Snapshot{}, false
 }
 
+// rereadArmedReviews reads the review conversations on every armed pull
+// request again, which is what a change to the feedback rules needs.
+//
+// Nothing on GitHub has to change for a rule change to mean something
+// different, and the tripwire only notices what moves a counter, so without
+// this the counts on screen stay as they were computed under the old rule
+// until `force_precise_every` comes round. A pull request the watcher has let
+// go dormant would wait longer still.
+func (a *App) rereadArmedReviews() tea.Cmd {
+	cmds := make([]tea.Cmd, 0, a.state.ArmedCount())
+	for _, pr := range a.views[viewOpen].prs {
+		key := pr.Key()
+		if pr.NodeID == "" || !a.armed(key) || a.runtimeOf(key).handing {
+			continue
+		}
+		cmd := a.loadReview(key, false)
+		if cmd == nil {
+			continue
+		}
+		a.setWatchOperation(key, "reading review feedback after a settings change")
+		a.recordWatchActivity(key, "settings changed; reading review feedback")
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(append(cmds, a.spin.Tick)...)
+}
+
 // loadReview reads the review conversations for a watcher or manual discovery.
 func (a *App) loadReview(key model.Key, manual bool) tea.Cmd {
 	if a.runtimeOf(key).reviewing {
