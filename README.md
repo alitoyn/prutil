@@ -244,10 +244,11 @@ by your own account. A reviewer writing it, deliberately or by quoting an agent
 that did, changes nothing.
 
 The prompt lives in `config.yaml`, which prutil writes once on first run and
-never rewrites. **An installation from before this marker existed still holds
-the old prompt**, so its agents will not write the marker and their replies will
-read as new feedback. Copy the `herdr.prompt` block out of a freshly generated
-configuration, or add the instruction to your own prompt by hand.
+never rewrites, and a prompt naming a `herdr.skill` is a slash command that says
+nothing about replies at all. So prutil adds the instruction itself to any
+prompt that renders without the marker: an installation from before the marker
+existed, and a prompt you wrote yourself, both still ask for it. Write the
+marker into your own prompt if you would rather word the request yourself.
 
 `N` is a diagnostic trigger for the automatic path. It asks GitHub for the
 selected open pull request's review threads and sends only feedback prutil has

@@ -1,6 +1,7 @@
 package home_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -148,4 +149,45 @@ func TestThePromptTellsTheAgentToWriteTheMarkerTheWatcherReads(t *testing.T) {
 	// later, so the string it asks for has to be the string model looks for.
 	assert.Contains(t, home.DefaultPrompt, model.AgentCommentMarker)
 	assert.Contains(t, string(home.DefaultConfigTemplate()), model.AgentCommentMarker)
+}
+
+func TestEveryRenderedPromptAsksForTheMarker(t *testing.T) {
+	// Whatever the prompt says, the agent has to be told to sign its replies:
+	// an unsigned reply is read as fresh feedback and handed back to an agent,
+	// which is a loop that never settles.
+	data := home.PromptData{Repo: "relloyd/prutil", Number: 8, URL: "https://github.com/relloyd/prutil/pull/8"}
+	cases := []struct {
+		name  string
+		herdr home.HerdrConfig
+	}{
+		{
+			name:  "the default prompt, which asks for the marker in its own words",
+			herdr: home.HerdrConfig{Prompt: home.DefaultPrompt},
+		},
+		{
+			name:  "a skill prompt, which is a slash command and says nothing about replies",
+			herdr: home.HerdrConfig{Prompt: home.DefaultPrompt, Skill: "pr-triage"},
+		},
+		{
+			name:  "a prompt written before the marker existed",
+			herdr: home.HerdrConfig{Prompt: "Have a look at {{.URL}} please."},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := c.herdr.RenderPrompt(data)
+			require.NoError(t, err)
+			assert.Contains(t, out, model.AgentCommentMarker)
+		})
+	}
+}
+
+func TestAPromptThatAlreadyAsksForTheMarkerIsLeftAlone(t *testing.T) {
+	// Appending to a prompt that has already asked would have the agent read
+	// the same instruction twice, once in somebody else's wording.
+	herdr := home.HerdrConfig{Prompt: home.DefaultPrompt}
+	out, err := herdr.RenderPrompt(home.PromptData{URL: "https://github.com/relloyd/prutil/pull/8"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(out, model.AgentCommentMarker))
+	assert.Equal(t, 1, strings.Count(out, home.MarkerInstruction))
 }

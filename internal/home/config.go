@@ -28,12 +28,23 @@ It is {{.HeadRef}} into {{.BaseRef}}, with {{.UnresolvedCount}} unresolved revie
 	`{{if eq .UnresolvedCount 1}}thread{{else}}threads{{end}}. Read each one, make the ` +
 	`changes that should be made, and reply on the threads you are leaving alone saying why.
 
-End every reply you leave on a review thread with this line on its own, which is how
-prutil knows the reply is yours and not new feedback for you:
-` + model.AgentCommentMarker +
+` + MarkerInstruction +
 	`{{end}}{{if .Note}}
 
 {{.Note}}{{end}}`
+
+// MarkerInstruction asks an agent to sign every review reply with
+// model.AgentCommentMarker.
+//
+// RenderPrompt appends it to any prompt that renders without the marker, so a
+// skill prompt, a prompt somebody wrote by hand and a config.yaml written
+// before the marker existed all carry it. It is prutil's own bookkeeping
+// rather than a matter of taste: an unsigned reply is read as fresh feedback
+// and handed straight back to an agent, which answers with another unsigned
+// reply, and the pull request never settles.
+const MarkerInstruction = `End every reply you leave on a review thread with this line on its own, which is how
+prutil knows the reply is yours and not new feedback for you:
+` + model.AgentCommentMarker
 
 // DefaultCheckPrompt is what prutil says to an agent when a pull request's
 // checks have failed and no check-specific prompt is configured.
@@ -342,6 +353,15 @@ func (h HerdrConfig) RenderPrompt(data PromptData) (string, error) {
 	text := strings.TrimSpace(out.String())
 	if text == "" {
 		return "", fmt.Errorf("the configured herdr prompt rendered to nothing")
+	}
+	// The prompt is the only way the marker reaches a reply, and the prompt is
+	// the reader's to write: a skill invocation says nothing about replies at
+	// all, and a configuration written before the marker existed never mentions
+	// it. Neither reader should be paying for that with an agent that is handed
+	// its own answers, so prutil asks for the marker itself when the rendered
+	// prompt has not.
+	if !strings.Contains(text, model.AgentCommentMarker) {
+		text += "\n\n" + MarkerInstruction
 	}
 	return text, nil
 }

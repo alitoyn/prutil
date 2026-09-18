@@ -223,10 +223,13 @@ handed over for as long as it stays open.
 Do not recognise an agent's reply by its prose. `AgentCommentMarker` is the
 only thing that answers, because "automated response" is a phrase a reviewer
 can type and a thread that matched it would take itself off the list by
-accident. The marker gets onto a reply through `home.DefaultPrompt`, which
-`TestThePromptTellsTheAgentToWriteTheMarkerTheWatcherReads` pins to the
-constant; note that an installation predating the marker keeps its own prompt
-in `config.yaml` and so never writes it.
+accident. The marker gets onto a reply through the prompt, so `RenderPrompt` appends
+`home.MarkerInstruction` to any prompt that renders without it. That is the
+whole guarantee: `config.yaml` is written once and never rewritten, so an
+installation predating the marker keeps a prompt that never asks for it, and a
+prompt naming a `herdr.skill` is a slash command that says nothing about
+replies. Leave that in the mechanism rather than in the text a reader owns;
+`TestEveryRenderedPromptAsksForTheMarker` pins it.
 
 `handoff.pick` matches an agent to a pull request on what git says about its
 checkout, never on how its branch name looks: prutil's own workspace branch,
