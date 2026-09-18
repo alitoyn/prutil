@@ -234,7 +234,7 @@ func (k keyMap) helpSections(mouse bool) []helpSection {
 		}},
 		{title: "General", entries: []helpEntry{
 			{binding: k.Settings, title: "settings",
-				detail: "View and toggle prutil settings, including desktop notifications and self-review mode. Each change is saved to the configuration file as it is made."},
+				detail: "View and edit prutil configuration settings, including notifications, watch polling intervals, AI review prompts, and herdr integration. Each change is saved to the configuration file as it is made."},
 			{binding: k.Help, title: "keyboard shortcuts",
 				detail: "Open this list. Type to filter, enter to run the highlighted shortcut, esc to close."},
 			{binding: k.Quit, title: "quit",
