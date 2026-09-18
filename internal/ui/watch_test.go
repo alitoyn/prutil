@@ -352,7 +352,7 @@ func TestTheSpinnerRunsWhileAHandoffWaitsForAnAgent(t *testing.T) {
 func TestFeedbackIsWhateverIsUnresolvedAndNotTheViewersOwnLastWord(t *testing.T) {
 	threads := sampleThreads().Threads
 
-	got := model.Feedback(threads, "relloyd", model.DefaultSelfTestMarker)
+	got := model.Feedback(threads, model.ReviewFilter{Viewer: "relloyd", Marker: model.DefaultSelfTestMarker})
 	require.Len(t, got, 2)
 	assert.Equal(t, "T1", got[0].ID)
 	assert.Equal(t, "T2", got[1].ID)
@@ -995,7 +995,7 @@ func TestOnePullRequestsWatcherStateLivesInOneEntry(t *testing.T) {
 
 	// Everything on this pull request has already been handed over, so the
 	// read finishes without starting anything else.
-	app.state.RecordHandoff(key.String(), model.Digest(sampleThreads().Feedback(model.DefaultSelfTestMarker)), testNow)
+	app.state.RecordHandoff(key.String(), model.Digest(sampleThreads().Feedback(model.ReviewFilter{Marker: model.DefaultSelfTestMarker})), testNow)
 
 	send(t, app, watchSnapshotMsg{
 		keys:  []model.Key{key},

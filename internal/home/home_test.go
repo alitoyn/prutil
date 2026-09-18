@@ -93,7 +93,10 @@ func TestTheDefaultPromptInvokesTheConfiguredSkill(t *testing.T) {
 		URL: "https://github.com/relloyd/prutil/pull/42",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42", text)
+	// The slash command leads, because that is how the agent is asked for the
+	// skill by name, and prutil's own instruction follows it: a skill prompt
+	// says nothing about replies, so without this the agent never signs one.
+	assert.Equal(t, "/pr-triage https://github.com/relloyd/prutil/pull/42\n\n"+home.MarkerInstruction, text)
 }
 
 func TestTheDefaultPromptSpellsTheJobOutWhenNoSkillIsConfigured(t *testing.T) {
@@ -146,8 +149,10 @@ func TestAPromptNoteIsAppendedSoTheAgentKnowsAboutTheWrongBranch(t *testing.T) {
 			require.NoError(t, err)
 			// The note is a paragraph of its own. Indented after a blank line
 			// it would be a Markdown code block, which an agent reads as a
-			// quotation rather than as something it has been told.
-			assert.True(t, strings.HasSuffix(text, "\n\nThe checkout is on main."), "%q", text)
+			// quotation rather than as something it has been told. It is no
+			// longer always last: a prompt that never asks for the marker has
+			// prutil's instruction appended after it.
+			assert.Contains(t, text, "\n\nThe checkout is on main.", "%q", text)
 			assert.NotContains(t, text, "\t", "nothing in the prompt is indented")
 		})
 	}

@@ -267,11 +267,12 @@ type reviewThreadNode struct {
 // reviewCommentNode is one comment inside a review thread. Only the fields
 // both aliases can supply are declared; the missing ones decode to zero.
 type reviewCommentNode struct {
-	ID        string     `json:"id"`
-	URL       string     `json:"url"`
-	Body      string     `json:"body"`
-	CreatedAt *time.Time `json:"createdAt"`
-	Author    struct {
+	ID          string     `json:"id"`
+	URL         string     `json:"url"`
+	Body        string     `json:"body"`
+	CreatedAt   *time.Time `json:"createdAt"`
+	PublishedAt *time.Time `json:"publishedAt"`
+	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
 }
@@ -285,19 +286,20 @@ func (n reviewThreadNode) toReviewThread() (model.ReviewThread, bool) {
 	opener, latest := n.Opener.Nodes[0], n.Latest.Nodes[0]
 
 	return model.ReviewThread{
-		ID:         n.ID,
-		Resolved:   n.IsResolved,
-		Outdated:   n.IsOutdated,
-		Path:       n.Path,
-		URL:        latest.URL,
-		Opener:     opener.Author.Login,
-		OpenedAt:   at(opener.CreatedAt),
-		Body:       strings.TrimSpace(opener.Body),
-		LatestBy:   latest.Author.Login,
-		LatestID:   latest.ID,
-		LatestAt:   at(latest.CreatedAt),
-		LatestBody: strings.TrimSpace(latest.Body),
-		Comments:   n.Latest.TotalCount,
+		ID:            n.ID,
+		Resolved:      n.IsResolved,
+		Outdated:      n.IsOutdated,
+		Path:          n.Path,
+		URL:           latest.URL,
+		Opener:        opener.Author.Login,
+		OpenedAt:      at(opener.CreatedAt),
+		Body:          strings.TrimSpace(opener.Body),
+		LatestBy:      latest.Author.Login,
+		LatestID:      latest.ID,
+		LatestAt:      at(latest.CreatedAt),
+		LatestBody:    strings.TrimSpace(latest.Body),
+		LatestPending: latest.PublishedAt == nil,
+		Comments:      n.Latest.TotalCount,
 	}, true
 }
 

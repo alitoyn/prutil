@@ -26,10 +26,113 @@ const (
 	// happened, which can take a sentence and a hint.
 	settingsNoticeLines = 2
 	// settingsChrome is the lines every settings pane spends besides its rows
-	// and its notice: the top edge, the section heading, the rule above the
-	// notice and the bottom edge.
-	settingsChrome = 4
+	// and its notice: the top edge, the rule above the notice and the bottom edge.
+	settingsChrome = 3
 )
+
+// settingItem is one toggleable setting in the s pane. enabled reads it, set
+// applies it in memory and saves it, and after runs once it has, returning
+// anything else the reader should know and any work the change starts.
+//
+// The behaviour hangs off the item rather than off a kind, so a setting that
+// is neither a notification nor a watch option costs an entry in allSettings
+// and nothing else.
+type settingItem struct {
+	section string
+	setting string
+	detail  string
+	enabled func(a *App) bool
+	set     func(a *App, on bool) error
+	after   func(a *App, on bool) (warning string, cmd tea.Cmd)
+}
+
+// allSettings lists every setting prutil can change for itself in the pane. The
+// notification rows are built from notifications, which stays the one list of
+// what prutil can notify about, so a new notification appears here by itself.
+var allSettings = buildSettings()
+
+func buildSettings() []settingItem {
+	out := make([]settingItem, 0, len(notifications)+1)
+	for _, n := range notifications {
+		out = append(out, settingItem{
+			section: "DESKTOP NOTIFICATIONS",
+			setting: n.setting,
+			detail:  n.detail,
+			enabled: func(a *App) bool { return a.homeCfg.Notifications.Enabled(n.event) },
+			set: func(a *App, on bool) error {
+				a.homeCfg.Notifications.Set(n.event, on)
+				return a.save(func(s *home.Store) error { return s.SetNotification(n.event, on) })
+			},
+			after: func(a *App, on bool) (string, tea.Cmd) {
+				warning := ""
+				if on {
+					warning = a.settings.unavailable
+				}
+				// Starts the reads when this was the first notification turned
+				// on. The last one turned off ends them at the next wake-up,
+				// with no request.
+				return warning, a.scheduleNotifications()
+			},
+		})
+	}
+
+	return append(out, settingItem{
+		section: "WATCHING",
+		setting: "Self-review feedback",
+		detail: "Treat every unresolved review comment written from your account as actionable feedback for " +
+			"coding agents, apart from the replies your agents left behind.",
+		enabled: func(a *App) bool { return a.homeCfg.Watch.SelfReview },
+		set: func(a *App, on bool) error {
+			a.homeCfg.Watch.SelfReview = on
+			return a.save(func(s *home.Store) error { return s.SetWatchSelfReview(on) })
+		},
+		// The rule this changes is applied when review threads are read, so
+		// the feedback counts already on screen answer the question as it was
+		// asked before. Reading them again is the only thing that makes the
+		// setting mean anything before the next forced read.
+		after: func(a *App, _ bool) (string, tea.Cmd) {
+			return "", a.rereadArmedReviews()
+		},
+	})
+}
+
+// save writes one change to the configuration file, or says why it could not.
+// Every setting goes through here, so the one thing each of them would
+// otherwise have to remember - that there may be no store to write to - is
+// remembered in one place.
+func (a *App) save(write func(*home.Store) error) error {
+	if a.store == nil {
+		return a.storeErr
+	}
+	return write(a.store)
+}
+
+// settingsRow is one line inside the window: either a section header or a setting.
+type settingsRow struct {
+	heading string
+	item    int
+}
+
+// settingsRowList is what the pane draws, section headings and settings
+// interleaved, and settingsRowOf is the row each setting sits on. Both follow
+// from allSettings and never change, so they are built once beside it rather
+// than on every frame and every key press.
+var settingsRowList, settingsRowOf = buildSettingsRows()
+
+func buildSettingsRows() ([]settingsRow, []int) {
+	rows := make([]settingsRow, 0, len(allSettings)+2)
+	rowOf := make([]int, len(allSettings))
+	lastSection := ""
+	for i, s := range allSettings {
+		if s.section != lastSection {
+			rows = append(rows, settingsRow{heading: s.section, item: -1})
+			lastSection = s.section
+		}
+		rowOf[i] = len(rows)
+		rows = append(rows, settingsRow{item: i})
+	}
+	return rows, rowOf
+}
 
 // settingsPane is the s pane: the settings prutil can change for itself, each
 // saved the moment it changes, so there is nothing to confirm and nothing to
@@ -136,23 +239,27 @@ func (a *App) clickSettings(msg tea.MouseClickMsg) tea.Cmd {
 		return nil
 	}
 	l := a.settingsLayout()
-	// The rows start beneath the top edge and the section heading.
-	row := msg.Y - l.y - 2
+	// The rows start beneath the top edge.
+	row := msg.Y - l.y - 1
 	if msg.X < l.x || msg.X >= l.x+l.width || row < 0 || row >= l.window {
 		return nil
 	}
 	index := a.settings.offset + row
-	if index >= len(notifications) {
+	if index >= len(settingsRowList) {
 		return nil
 	}
-	a.settings.cursor = index
+	item := settingsRowList[index].item
+	if item < 0 {
+		return nil
+	}
+	a.settings.cursor = item
 	return a.toggleSetting()
 }
 
 // moveSettings steps the selection by delta, clamped to the list.
 func (a *App) moveSettings(delta int) {
 	s := &a.settings
-	cursor := min(max(s.cursor+delta, 0), len(notifications)-1)
+	cursor := min(max(s.cursor+delta, 0), len(allSettings)-1)
 	if cursor != s.cursor {
 		s.notice, s.noticeErr = "", false
 	}
@@ -163,42 +270,48 @@ func (a *App) moveSettings(delta int) {
 // clampSettingsScroll keeps the selected row inside the drawn window.
 func (a *App) clampSettingsScroll() {
 	s := &a.settings
-	s.offset = clampOffset(s.offset, s.cursor, a.settingsLayout().window, len(notifications))
+	if len(allSettings) == 0 {
+		s.cursor, s.offset = 0, 0
+		return
+	}
+	window := a.settingsLayout().window
+	row := settingsRowOf[s.cursor]
+	s.offset = clampOffset(s.offset, row, window, len(settingsRowList))
+	// Scrolling up onto the first entry of a section brings its heading with
+	// it, so the reader is never shown an entry without knowing where it is.
+	if row > 0 && s.offset == row && settingsRowList[row-1].item < 0 && window > 1 {
+		s.offset = row - 1
+	}
 }
 
-// toggleSetting turns the selected notification on or off and saves it.
+// toggleSetting turns the selected setting on or off and saves it.
 //
 // The change applies straight away whether or not it could be saved, and the
-// notice says which: a reader who cannot save still wants the notification
+// notice says which: a reader who cannot save still wants the setting
 // they just asked for, for as long as this prutil runs.
 func (a *App) toggleSetting() tea.Cmd {
-	kind := notifications[a.settings.cursor]
-	on := !a.homeCfg.Notifications.Enabled(kind.event)
-	a.homeCfg.Notifications.Set(kind.event, on)
+	item := allSettings[a.settings.cursor]
+	on := !item.enabled(a)
+	err := item.set(a, on)
+
+	warning, cmd := "", tea.Cmd(nil)
+	if item.after != nil {
+		warning, cmd = item.after(a, on)
+	}
 
 	state := "off"
 	if on {
 		state = "on"
 	}
-	switch err := a.saveNotification(kind.event, on); {
+	switch {
 	case err != nil:
-		a.settings.setNotice(fmt.Sprintf("%s is %s until prutil quits, but was not saved: %s", kind.setting, state, err), true)
-	case on && a.settings.unavailable != "":
-		a.settings.setNotice(fmt.Sprintf("%s is on and saved, but nothing will appear: %s", kind.setting, a.settings.unavailable), true)
+		a.settings.setNotice(fmt.Sprintf("%s is %s until prutil quits, but was not saved: %s", item.setting, state, err), true)
+	case warning != "":
+		a.settings.setNotice(fmt.Sprintf("%s is on and saved, but nothing will appear: %s", item.setting, warning), true)
 	default:
-		a.settings.setNotice(fmt.Sprintf("%s is %s · saved", kind.setting, state), false)
+		a.settings.setNotice(fmt.Sprintf("%s is %s · saved", item.setting, state), false)
 	}
-	// Starts the reads when this was the first notification turned on. The
-	// last one turned off ends them at the next wake-up, with no request.
-	return a.scheduleNotifications()
-}
-
-// saveNotification writes one setting to the configuration file.
-func (a *App) saveNotification(event home.NotificationEvent, on bool) error {
-	if a.store == nil {
-		return a.storeErr
-	}
-	return a.store.SetNotification(event, on)
+	return cmd
 }
 
 // setNotice replaces what the pane says about the last thing it did.
@@ -250,7 +363,7 @@ func (a *App) settingsLayout() settingsLayout {
 	}
 	l.inner = max(l.width-4, 1)
 
-	rows := len(notifications)
+	totalRows := len(settingsRowList)
 	fixed := func() int {
 		n := settingsChrome + l.noticeLines
 		if l.detail {
@@ -258,13 +371,13 @@ func (a *App) settingsLayout() settingsLayout {
 		}
 		return n
 	}
-	if fixed()+rows > room {
+	if fixed()+totalRows > room {
 		l.detail = false
 	}
-	if fixed()+rows > room {
+	if fixed()+totalRows > room {
 		l.noticeLines = 1
 	}
-	l.window = max(min(rows, room-fixed()), 1)
+	l.window = max(min(totalRows, room-fixed()), 1)
 	l.height = fixed() + l.window
 	l.x = max((a.width-l.width)/2, 0)
 	l.y = max((a.height-l.height)/2, 0)
@@ -284,19 +397,23 @@ func (a *App) settingsBox(l settingsLayout) []string {
 	box := make([]string, 0, l.height)
 	box = append(box,
 		a.edge(l.width, "╭", "╮", a.styles.OverlayTitle.Render("Settings"), a.styles.Muted.Render(a.configLabel())),
-		a.frameRow("  "+a.styles.SectionHdr.Render("DESKTOP NOTIFICATIONS"), l.inner),
 	)
 	for i := 0; i < l.window; i++ {
 		line, index := "", s.offset+i
-		if index < len(notifications) {
-			line = a.settingLine(notifications[index], index == s.cursor, l.inner)
+		if index < len(settingsRowList) {
+			r := settingsRowList[index]
+			if r.item < 0 {
+				line = "  " + a.styles.SectionHdr.Render(r.heading)
+			} else {
+				line = a.settingLine(allSettings[r.item], r.item == s.cursor, l.inner)
+			}
 		}
 		box = append(box, a.frameRow(line, l.inner))
 	}
 
 	if l.detail {
 		box = append(box, a.frameRule(l.width))
-		lines := wrapLines(notifications[s.cursor].detail, l.inner, settingsDetailLines)
+		lines := wrapLines(allSettings[s.cursor].detail, l.inner, settingsDetailLines)
 		for i := 0; i < settingsDetailLines; i++ {
 			text := ""
 			if i < len(lines) {
@@ -320,20 +437,20 @@ func (a *App) settingsBox(l settingsLayout) []string {
 }
 
 // settingLine draws one toggle: the selection bar, a box that is ticked when
-// the notification is on, its name, and on or off at the far end, so the state
+// the setting is on, its name, and on or off at the far end, so the state
 // is written out as well as coloured.
-func (a *App) settingLine(n notification, selected bool, width int) string {
+func (a *App) settingLine(item settingItem, selected bool, width int) string {
 	prefix, titleStyle := "  ", a.styles.Text
 	if selected {
 		prefix, titleStyle = a.styles.SelectBar.Render("▌")+" ", a.styles.Title
 	}
 	box, state, stateStyle := "[ ]", "off", a.styles.Muted
-	if a.homeCfg.Notifications.Enabled(n.event) {
+	if item.enabled(a) {
 		box, state, stateStyle = "[✓]", "on", a.styles.Success
 	}
 
 	room := max(width-2-lenOf(box)-1, 1)
-	title := titleStyle.Render(truncatePlain(n.setting, max(room-lenOf(state)-2, 1)))
+	title := titleStyle.Render(truncatePlain(item.setting, max(room-lenOf(state)-2, 1)))
 	return prefix + stateStyle.Render(box) + " " + justify(room, title, stateStyle.Render(state))
 }
 

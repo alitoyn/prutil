@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/relloyd/prutil/internal/home"
+	"github.com/relloyd/prutil/internal/model"
 )
 
 // openSettingsPane presses s and checks the pane came up.
@@ -36,6 +37,18 @@ func approvedRow(t *testing.T, app *App) string {
 	return ""
 }
 
+// selfReviewRow is the settings pane's row for self-review feedback, as drawn.
+func selfReviewRow(t *testing.T, app *App) string {
+	t.Helper()
+	for _, line := range lines(app) {
+		if strings.Contains(line, "Self-review feedback") {
+			return line
+		}
+	}
+	require.Fail(t, "the settings pane shows no self-review row")
+	return ""
+}
+
 func TestEveryNotificationHasOneEntryInTheSettings(t *testing.T) {
 	events := make([]home.NotificationEvent, 0, len(notifications))
 	for _, n := range notifications {
@@ -49,6 +62,28 @@ func TestEveryNotificationHasOneEntryInTheSettings(t *testing.T) {
 		"the settings list every notification home knows about, once and in the same order")
 }
 
+func TestTheSettingsPaneShowsEveryNotificationWordForWord(t *testing.T) {
+	// Asked of allSettings this could not fail, because the notification rows
+	// are built by copying these very strings out of notifications. The pane
+	// as drawn is the thing worth pinning: a notification that never reaches a
+	// row is one the reader cannot reach either.
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+	screen := plain(app.render())
+
+	for _, n := range notifications {
+		assert.Contains(t, screen, n.setting,
+			"the settings pane draws no row for the %q notification", n.setting)
+	}
+	// The selected row's explanation is drawn beneath the list, and it is the
+	// notification's own words that belong there, wrapped to the box.
+	l := app.settingsLayout()
+	for _, line := range wrapLines(notifications[app.settings.cursor].detail, l.inner, settingsDetailLines) {
+		assert.Contains(t, screen, line,
+			"the pane explains the selected notification in words of its own")
+	}
+}
+
 func TestSOpensTheSettingsAndEscClosesThem(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
 	focus, cursor := app.focus, app.cur().cursor
@@ -57,10 +92,15 @@ func TestSOpensTheSettingsAndEscClosesThem(t *testing.T) {
 	screen := plain(app.render())
 	assert.Contains(t, screen, "Settings")
 	assert.Contains(t, screen, "DESKTOP NOTIFICATIONS")
+	assert.Contains(t, screen, "WATCHING")
 	row := approvedRow(t, app)
 	assert.Contains(t, row, "[✓]")
 	assert.Contains(t, row, "on")
+	srow := selfReviewRow(t, app)
+	assert.Contains(t, srow, "[ ]")
+	assert.Contains(t, srow, "off")
 	assert.Contains(t, screen, "space toggle")
+	assert.Contains(t, screen, "t test notification")
 
 	send(t, app, press("esc"))
 	assert.False(t, app.settings.open)
@@ -142,6 +182,65 @@ func TestSpaceTurnsANotificationOffAndSavesIt(t *testing.T) {
 	saved, err = app.store.LoadConfig()
 	require.NoError(t, err)
 	assert.False(t, saved.Notifications.Enabled(home.NotifyApproved))
+}
+
+func TestSpaceTurnsSelfReviewOnAndSavesIt(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+
+	send(t, app, press("j"))
+	assert.Equal(t, 1, app.settings.cursor)
+	assert.Contains(t, plain(app.render()), "Treat every unresolved review comment")
+
+	send(t, app, press("space"))
+	assert.True(t, app.homeCfg.Watch.SelfReview)
+	row := selfReviewRow(t, app)
+	assert.Contains(t, row, "[✓]")
+	assert.Contains(t, row, "on")
+	assert.Contains(t, plain(app.render()), "Self-review feedback is on · saved")
+
+	saved, err := app.store.LoadConfig()
+	require.NoError(t, err)
+	assert.True(t, saved.Watch.SelfReview, "the next run starts with it on")
+
+	send(t, app, press("enter"))
+	assert.False(t, app.homeCfg.Watch.SelfReview, "enter toggles as well")
+	saved, err = app.store.LoadConfig()
+	require.NoError(t, err)
+	assert.False(t, saved.Watch.SelfReview)
+}
+
+func TestTogglingSelfReviewReadsTheWatchedPullRequestsAgain(t *testing.T) {
+	// Nothing on GitHub changes when this setting does, so no tripwire will
+	// ever ask about it: without a read of its own the counts on screen keep
+	// answering the question as it was asked before.
+	app, client, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	require.True(t, app.armed(model.Key{Repo: "relloyd/prutil", Number: 42}))
+	before := client.reviewCalls
+
+	openSettingsPane(t, app)
+	send(t, app, press("j"))
+	pump(t, app, send(t, app, press("space")))
+
+	assert.Equal(t, before+1, client.reviewCalls, "the armed pull request is read again")
+
+	// Turning it off asks again, because the count it leaves behind was
+	// computed under the rule that has just been dropped.
+	pump(t, app, send(t, app, press("space")))
+	assert.Equal(t, before+2, client.reviewCalls)
+}
+
+func TestTogglingANotificationLeavesTheWatcherAlone(t *testing.T) {
+	// Only the settings that change what feedback means are worth a request.
+	app, client, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	before := client.reviewCalls
+
+	openSettingsPane(t, app)
+	pump(t, app, send(t, app, press("space")))
+
+	assert.Equal(t, before, client.reviewCalls)
 }
 
 func TestTheSettingsDoNotWriteIntoTheCallersConfiguration(t *testing.T) {
@@ -274,6 +373,12 @@ func TestClickingASettingTogglesItAndClicksElsewhereDoNothing(t *testing.T) {
 	send(t, app, tea.MouseClickMsg{X: l.x + 4, Y: l.y + 2, Button: tea.MouseRight})
 	assert.False(t, app.homeCfg.Notifications.Enabled(home.NotifyApproved), "only the left button toggles")
 
+	send(t, app, click(l.x+4, l.y+3))
+	assert.False(t, app.homeCfg.Watch.SelfReview, "a click on the second heading changes nothing")
+
+	send(t, app, click(l.x+4, l.y+4))
+	assert.True(t, app.homeCfg.Watch.SelfReview, "a click on the second row toggles it")
+
 	send(t, app, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	assert.Equal(t, cursor, app.cur().cursor, "the wheel does not scroll the list behind the pane")
 }
@@ -288,10 +393,10 @@ func TestMovingTheSelectionStaysInsideTheListAndClearsTheNotice(t *testing.T) {
 	assert.Zero(t, app.settings.cursor, "up at the top stays put")
 	assert.NotEmpty(t, app.settings.notice, "staying put keeps the notice")
 	send(t, app, press("j"))
-	assert.Equal(t, len(notifications)-1, app.settings.cursor)
-	if len(notifications) > 1 {
-		assert.Empty(t, app.settings.notice, "a notice about another row is cleared")
-	}
+	assert.Equal(t, len(allSettings)-1, app.settings.cursor)
+	assert.Empty(t, app.settings.notice, "a notice about another row is cleared")
+	send(t, app, press("j"))
+	assert.Equal(t, len(allSettings)-1, app.settings.cursor, "down at the bottom stays put")
 }
 
 func TestTheSettingsExplainTheSelectedNotificationAndHowOftenPrutilLooks(t *testing.T) {

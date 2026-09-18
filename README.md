@@ -209,7 +209,7 @@ Stopping and starting the watch clears that remembered head and intentionally
 allows the current failures to be investigated again.
 
 To test watcher delivery with a code-line comment of your own, put this exact
-marker in either the opening comment or your latest reply's Markdown source:
+marker in the thread's newest comment's Markdown source:
 
 ```html
 <!-- prutil:test -->
@@ -218,11 +218,37 @@ marker in either the opening comment or your latest reply's Markdown source:
 GitHub hides the marker when it renders the comment. While that thread remains
 unresolved, prutil treats it as feedback even though you wrote the latest
 comment. The marker only works when it is in a comment written by the
-authenticated viewer: either the thread's opening comment or the viewer's
-latest reply. It does not opt in an ordinary pull-request conversation comment,
-a marker written by another reviewer, or an older reply that is no longer the
-latest. Normal duplicate suppression still applies, so the thread is handed
-over again only when it gains a new latest comment.
+authenticated viewer, and only in the thread's newest comment, so that a thread
+somebody has since replied to falls off the list rather than being handed over
+for as long as it stays open. It does not opt in an ordinary pull-request
+conversation comment, a marker written by another reviewer, or an older reply
+that is no longer the latest. Normal duplicate suppression still applies, so
+the thread is handed over again only when it gains a new latest comment.
+
+### Your own review comments as feedback
+
+`watch.self_review` turns every unresolved review comment you wrote into
+feedback, without needing the test marker in each one. It is off by default;
+`s` toggles it under `WATCHING` and saves the change.
+
+Either way, a reply your agent left must not read back as fresh feedback, or
+the same work goes round again. The default prompt asks the agent to end every
+review reply with this line:
+
+```html
+<!-- prutil:agent -->
+```
+
+prutil skips a thread whose newest comment carries that marker *and* was posted
+by your own account. A reviewer writing it, deliberately or by quoting an agent
+that did, changes nothing.
+
+The prompt lives in `config.yaml`, which prutil writes once on first run and
+never rewrites, and a prompt naming a `herdr.skill` is a slash command that says
+nothing about replies at all. So prutil adds the instruction itself to any
+prompt that renders without the marker: an installation from before the marker
+existed, and a prompt you wrote yourself, both still ask for it. Write the
+marker into your own prompt if you would rather word the request yourself.
 
 `N` is a diagnostic trigger for the automatic path. It asks GitHub for the
 selected open pull request's review threads and sends only feedback prutil has
@@ -353,6 +379,7 @@ watch:
   idle_interval: 10s        # how often a busy agent is re-read
   dormant_after: 3          # polls at the cap before prutil stops asking
   force_precise_every: 5    # polls before the expensive question is asked anyway
+  self_review: false        # treat every unresolved comment of yours as feedback
   self_test_marker: "<!-- prutil:test -->"  # "" turns it off
 review:
   comment: "/gemini review"  # comment posted by R to trigger an AI review; "" turns it off

@@ -63,10 +63,10 @@ type Review struct {
 	Truncated bool
 }
 
-// Feedback is the threads still waiting on the viewer. marker is the
-// configured self-test marker, empty to ignore one.
-func (r Review) Feedback(marker string) []model.ReviewThread {
-	return model.Feedback(r.Threads, r.Viewer, marker)
+// Feedback is the threads still waiting on the viewer.
+func (r Review) Feedback(filter model.ReviewFilter) []model.ReviewThread {
+	filter.Viewer = r.Viewer
+	return model.Feedback(r.Threads, filter)
 }
 
 // ClosedResult is the outcome of a recently-closed query.
