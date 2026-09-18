@@ -6,7 +6,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -138,50 +137,14 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 	if !event.Known() {
 		return fmt.Errorf("prutil has no %q notification", event)
 	}
-	// Creates the template when the file has gone, and says so when it does
-	// not parse, which is not a file to be editing.
-	if _, err := s.LoadOrCreateConfig(); err != nil {
-		return err
-	}
-
-	target, err := filepath.EvalSymlinks(s.Path(ConfigFile))
-	if err != nil {
-		return fmt.Errorf("could not find %s: %w", s.Path(ConfigFile), err)
-	}
-	info, err := os.Stat(target)
-	if err != nil {
-		return fmt.Errorf("could not read %s: %w", target, err)
-	}
-	data, err := os.ReadFile(target)
-	if err != nil {
-		return fmt.Errorf("could not read %s: %w", target, err)
-	}
-	before, err := ParseConfig(data)
-	if err != nil {
-		return err
-	}
-
-	path := notificationPath(event)
-	manual := fmt.Errorf("set %s to %t in %s by hand", dotted(path), on, target)
-	edited, err := setScalar(data, path, strconv.FormatBool(on))
-	if err != nil {
-		return fmt.Errorf("%w; %w", err, manual)
-	}
-
-	// Reading the result back is what makes editing text safe: whatever the
-	// edit did, the only difference it may make is the one asked for.
-	want := before
-	want.Notifications.Events = maps.Clone(before.Notifications.Events)
-	want.Notifications.Set(event, on)
-	after, err := ParseConfig(edited)
-	if err != nil || !reflect.DeepEqual(after, want) {
-		return fmt.Errorf("could not change %s without disturbing the rest of it; %w", target, manual)
-	}
-
-	if string(edited) == string(data) {
-		return nil
-	}
-	return replaceFile(target, edited, info.Mode().Perm())
+	return s.SaveSetting(notificationPath(event), strconv.FormatBool(on), func(c *Config) {
+		if c.Notifications.Events == nil {
+			c.Notifications.Events = map[NotificationEvent]bool{}
+		} else {
+			c.Notifications.Events = maps.Clone(c.Notifications.Events)
+		}
+		c.Notifications.Set(event, on)
+	})
 }
 
 // dotted writes a configuration path the way the documentation does.

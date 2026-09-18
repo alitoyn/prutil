@@ -185,3 +185,61 @@ func countDiffLines(a, b string) int {
 	}
 	return n
 }
+
+func TestSetBlockScalarReplacesMultilineBlockScalar(t *testing.T) {
+	src := "herdr:\n  prompt: |-\n    old line 1\n    old line 2\n  skill: triage\n"
+	got, err := setBlockScalar([]byte(src), []string{"herdr", "prompt"}, "new line 1\nnew line 2")
+	require.NoError(t, err)
+
+	cfg, err := ParseConfig(got)
+	require.NoError(t, err)
+	assert.Equal(t, "new line 1\nnew line 2", cfg.Herdr.Prompt)
+	assert.Equal(t, "triage", cfg.Herdr.Skill)
+	assert.Contains(t, string(got), "  prompt: |-\n    new line 1\n    new line 2\n")
+}
+
+func TestSetMapEntryAddsAndUpdatesMappingEntries(t *testing.T) {
+	src := "repos: {}\nreview:\n  comment: /gemini review\n"
+	got, err := setMapEntry([]byte(src), []string{"repos"}, "owner/repo", "~/src/repo")
+	require.NoError(t, err)
+
+	cfg, err := ParseConfig(got)
+	require.NoError(t, err)
+	assert.Equal(t, "~/src/repo", cfg.Repos["owner/repo"])
+
+	// Update existing
+	got2, err := setMapEntry(got, []string{"repos"}, "owner/repo", "~/work/repo")
+	require.NoError(t, err)
+	cfg2, err := ParseConfig(got2)
+	require.NoError(t, err)
+	assert.Equal(t, "~/work/repo", cfg2.Repos["owner/repo"])
+
+	// Delete entry
+	got3, err := deleteMapEntry(got2, []string{"repos"}, "owner/repo")
+	require.NoError(t, err)
+	cfg3, err := ParseConfig(got3)
+	require.NoError(t, err)
+	assert.Empty(t, cfg3.Repos["owner/repo"])
+}
+
+func TestSetSequenceUpdatesList(t *testing.T) {
+	src := "discovery:\n  roots: []\n"
+	got, err := setSequence([]byte(src), []string{"discovery", "roots"}, []string{"~/src", "~/work"})
+	require.NoError(t, err)
+
+	cfg, err := ParseConfig(got)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"~/src", "~/work"}, cfg.Discovery.Roots)
+}
+
+func TestDeleteKeyRemovesKeyFromYAML(t *testing.T) {
+	src := "watch:\n  active_interval: 15s\n  base_interval: 2m\n"
+	got, err := deleteKey([]byte(src), []string{"watch", "active_interval"})
+	require.NoError(t, err)
+
+	cfg, err := ParseConfig(got)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultConfig().Watch.ActiveInterval, cfg.Watch.ActiveInterval)
+	assert.NotContains(t, string(got), "active_interval")
+	assert.Contains(t, string(got), "base_interval: 2m")
+}

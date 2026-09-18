@@ -364,12 +364,22 @@ func defaultOverlayKeys() overlayKeyMap {
 // are apart from keyMap for the same reason as the overlay's: nothing pressed
 // in the pane should reach the list behind it.
 type settingsKeyMap struct {
-	Close  key.Binding
-	Toggle key.Binding
-	Test   key.Binding
-	Up     key.Binding
-	Down   key.Binding
-	Quit   key.Binding
+	Close     key.Binding
+	Toggle    key.Binding
+	Edit      key.Binding
+	CycleNext key.Binding
+	CyclePrev key.Binding
+	StepUp    key.Binding
+	StepDown  key.Binding
+	Default   key.Binding
+	NextSec   key.Binding
+	PrevSec   key.Binding
+	Test      key.Binding
+	Up        key.Binding
+	Down      key.Binding
+	Top       key.Binding
+	Bottom    key.Binding
+	Quit      key.Binding
 }
 
 // defaultSettingsKeys returns the bindings the settings pane reads. The keys
@@ -386,6 +396,38 @@ func defaultSettingsKeys() settingsKeyMap {
 			key.WithKeys("space", "enter", "x"),
 			key.WithHelp("space", "toggle"),
 		),
+		Edit: key.NewBinding(
+			key.WithKeys("enter", "e"),
+			key.WithHelp("enter", "edit"),
+		),
+		CycleNext: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→", "next"),
+		),
+		CyclePrev: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←", "prev"),
+		),
+		StepUp: key.NewBinding(
+			key.WithKeys("+", "]"),
+			key.WithHelp("+", "increase"),
+		),
+		StepDown: key.NewBinding(
+			key.WithKeys("-", "["),
+			key.WithHelp("-", "decrease"),
+		),
+		Default: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "default"),
+		),
+		NextSec: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next section"),
+		),
+		PrevSec: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "prev section"),
+		),
 		Test: key.NewBinding(
 			key.WithKeys("t"),
 			key.WithHelp("t", "test"),
@@ -397,6 +439,14 @@ func defaultSettingsKeys() settingsKeyMap {
 		Down: key.NewBinding(
 			key.WithKeys("down", "j", "ctrl+n"),
 			key.WithHelp("↓", "down"),
+		),
+		Top: key.NewBinding(
+			key.WithKeys("g", "home"),
+			key.WithHelp("g", "top"),
+		),
+		Bottom: key.NewBinding(
+			key.WithKeys("G", "end"),
+			key.WithHelp("G", "bottom"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c"),

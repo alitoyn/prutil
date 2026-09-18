@@ -288,10 +288,8 @@ func TestMovingTheSelectionStaysInsideTheListAndClearsTheNotice(t *testing.T) {
 	assert.Zero(t, app.settings.cursor, "up at the top stays put")
 	assert.NotEmpty(t, app.settings.notice, "staying put keeps the notice")
 	send(t, app, press("j"))
-	assert.Equal(t, len(notifications)-1, app.settings.cursor)
-	if len(notifications) > 1 {
-		assert.Empty(t, app.settings.notice, "a notice about another row is cleared")
-	}
+	assert.Equal(t, 1, app.settings.cursor)
+	assert.Empty(t, app.settings.notice, "a notice about another row is cleared")
 }
 
 func TestTheSettingsExplainTheSelectedNotificationAndHowOftenPrutilLooks(t *testing.T) {
@@ -350,4 +348,101 @@ func TestTheSettingsFitEveryTerminalSize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSettingsSteppingAndCycling(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	app.homeCfg.Notifications.Interval = home.Duration(2 * time.Minute)
+	openSettingsPane(t, app)
+
+	// Navigate to Check poll interval (item 1)
+	send(t, app, press("j"))
+	assert.Equal(t, 1, app.settings.cursor)
+
+	// Step interval up with +
+	send(t, app, press("+"))
+	assert.Equal(t, home.Duration(2*time.Minute+30*time.Second), app.homeCfg.Notifications.Interval)
+	assert.Contains(t, app.settings.notice, "Check poll interval set to 2m30s · saved")
+
+	// Step interval down with -
+	send(t, app, press("-"))
+	assert.Equal(t, home.Duration(2*time.Minute), app.homeCfg.Notifications.Interval)
+
+	// Jump to next section with tab (WATCHING & POLLING)
+	send(t, app, press("tab"))
+	assert.Equal(t, 2, app.settings.cursor) // watch.active_interval
+
+	// Jump to next section with tab (AI REVIEW TRIGGER)
+	send(t, app, press("tab"))
+	assert.Equal(t, 11, app.settings.cursor) // review.comment
+
+	// Jump to next section with tab (CODING AGENT)
+	send(t, app, press("tab"))
+	assert.Equal(t, 13, app.settings.cursor) // herdr.fallback
+
+	// Cycle fallback strategy
+	assert.Equal(t, home.FallbackNew, app.homeCfg.Herdr.Fallback)
+	send(t, app, press("right"))
+	assert.Equal(t, home.FallbackNone, app.homeCfg.Herdr.Fallback)
+	assert.Contains(t, app.settings.notice, "Fallback strategy set to \"none\" · saved")
+
+	send(t, app, press("right"))
+	assert.Equal(t, home.FallbackRepo, app.homeCfg.Herdr.Fallback)
+
+	send(t, app, press("d")) // Reset to default
+	assert.Equal(t, home.FallbackNew, app.homeCfg.Herdr.Fallback)
+	assert.Contains(t, app.settings.notice, "reset to default · saved")
+}
+
+func TestSettingsInlineTextEditing(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+
+	// Jump to review.comment (item 11)
+	send(t, app, press("tab"))
+	send(t, app, press("tab"))
+	assert.Equal(t, 11, app.settings.cursor)
+
+	// Press enter to edit
+	send(t, app, press("enter"))
+	assert.Equal(t, settingsModeEdit, app.settings.mode)
+
+	// Clear and enter new comment
+	app.settings.input.SetValue("/claude review")
+	send(t, app, press("enter"))
+	assert.Equal(t, settingsModeNormal, app.settings.mode)
+	assert.Equal(t, "/claude review", app.homeCfg.Review.CommentFor(""))
+	assert.Contains(t, app.settings.notice, "Review comment set to \"/claude review\" · saved")
+}
+
+func TestSettingsSubPaneMapAndSequence(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	openSettingsPane(t, app)
+
+	// Jump to last section (REPOSITORIES & DISCOVERY)
+	send(t, app, press("G"))
+	assert.Equal(t, len(allSettings())-1, app.settings.cursor) // discovery.roots
+
+	// Open sub-pane
+	send(t, app, press("enter"))
+	assert.Equal(t, settingsModeSubPane, app.settings.mode)
+	assert.Equal(t, subPaneDiscoveryRoots, app.settings.subPane.kind)
+
+	// Add a root
+	send(t, app, press("a"))
+	assert.True(t, app.settings.subPane.adding)
+	app.settings.subPane.valInput.SetValue("~/src")
+	send(t, app, press("enter"))
+	assert.False(t, app.settings.subPane.adding)
+	assert.Equal(t, []string{"~/src"}, app.homeCfg.Discovery.Roots)
+	assert.Contains(t, app.settings.notice, "Added discovery root \"~/src\" · saved")
+
+	// Delete the root
+	send(t, app, press("d"))
+	assert.Empty(t, app.homeCfg.Discovery.Roots)
+	assert.Contains(t, app.settings.notice, "Deleted discovery root \"~/src\" · saved")
+
+	// Close sub-pane with esc
+	send(t, app, press("esc"))
+	assert.Equal(t, settingsModeNormal, app.settings.mode)
 }

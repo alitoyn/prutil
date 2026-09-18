@@ -2,12 +2,17 @@ package ui
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"text/template"
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -17,8 +22,8 @@ import (
 )
 
 const (
-	// settingsMaxWidth keeps the pane about as wide as its longest sentence.
-	settingsMaxWidth = 72
+	// settingsMaxWidth keeps the pane wide enough for settings names and values.
+	settingsMaxWidth = 80
 	// settingsDetailLines is how much of the selected setting's explanation is
 	// shown beneath the list.
 	settingsDetailLines = 3
@@ -26,10 +31,40 @@ const (
 	// happened, which can take a sentence and a hint.
 	settingsNoticeLines = 2
 	// settingsChrome is the lines every settings pane spends besides its rows
-	// and its notice: the top edge, the section heading, the rule above the
-	// notice and the bottom edge.
-	settingsChrome = 4
+	// and its notice: top edge, rule above notice, bottom edge.
+	settingsChrome = 3
 )
+
+// settingsMode is the interaction mode of the settings pane.
+type settingsMode int
+
+const (
+	settingsModeNormal settingsMode = iota
+	settingsModeEdit
+	settingsModeTemplate
+	settingsModeSubPane
+)
+
+// subPaneType names the active sub-pane for complex collections.
+type subPaneType int
+
+const (
+	subPaneNone subPaneType = iota
+	subPaneRepos
+	subPaneReviewRepos
+	subPaneDiscoveryRoots
+)
+
+// subPaneState tracks state for managing maps or sequences.
+type subPaneState struct {
+	kind      subPaneType
+	cursor    int
+	adding    bool
+	editing   bool
+	keyInput  textinput.Model
+	valInput  textinput.Model
+	activeIdx int
+}
 
 // settingsPane is the s pane: the settings prutil can change for itself, each
 // saved the moment it changes, so there is nothing to confirm and nothing to
@@ -37,42 +72,70 @@ const (
 type settingsPane struct {
 	open   bool
 	keys   settingsKeyMap
+	mode   settingsMode
 	cursor int
 	offset int
+
+	// input is the inline text input for duration, int, and string fields.
+	input textinput.Model
+
+	// templateView tracks scrolling when previewing prompt templates.
+	templateScroll int
+
+	// subPane tracks state when editing maps or lists.
+	subPane subPaneState
+
 	// notice says what the last key did, and noticeErr whether it went wrong.
-	// Moving the selection clears it, so it never describes a row the reader
-	// has moved away from.
 	notice    string
 	noticeErr bool
+
 	// unavailable is why a notification would not appear, asked once when the
-	// pane opens. Turning one on is still allowed and saved: the reader may be
-	// about to install what is missing.
+	// pane opens.
 	unavailable string
+}
+
+// settingsDisplayRow is either a section header or a setting row in the list.
+type settingsDisplayRow struct {
+	isHeader bool
+	section  string
+	itemIdx  int
 }
 
 // settingsLayout is where the pane sits and how its height is spent.
 type settingsLayout struct {
 	x, y          int
 	width, height int
-	// inner is the width inside the frame and its padding.
-	inner int
-	// window is how many setting rows are drawn, detail whether the selected
-	// one's explanation fits beneath them, and noticeLines how many lines the
-	// notice gets.
-	window      int
-	detail      bool
-	noticeLines int
+	inner         int
+	window        int
+	detail        bool
+	noticeLines   int
 }
 
 // hinter is a notifier that can say where to look when a notification it
-// showed did not appear, which on macOS is a setting nobody would guess.
+// showed did not appear.
 type hinter interface {
 	Hint() string
 }
 
+// templateEditorFinishedMsg is returned when an external $EDITOR exits.
+type templateEditorFinishedMsg struct {
+	tmpFile string
+	isCheck bool
+	err     error
+}
+
 // openSettings shows the settings pane with the first setting selected.
 func (a *App) openSettings() {
-	a.settings = settingsPane{open: true, keys: defaultSettingsKeys()}
+	ti := textinput.New()
+	ti.Prompt = "› "
+	ti.SetStyles(a.styles.helpInput())
+
+	a.settings = settingsPane{
+		open:  true,
+		keys:  defaultSettingsKeys(),
+		mode:  settingsModeNormal,
+		input: ti,
+	}
 	if a.notifier == nil {
 		a.settings.unavailable = "prutil cannot show desktop notifications here"
 	} else if err := a.notifier.Available(); err != nil {
@@ -86,14 +149,45 @@ func (a *App) closeSettings() {
 	a.settings = settingsPane{}
 }
 
-// updateSettings handles the messages the pane takes for itself while it is
-// open, and reports whether it took this one. Keys and the mouse belong to it;
-// replies from GitHub go on to the app as usual.
+// displayRows computes the flattened list of section headers and item rows.
+func (a *App) displayRows() []settingsDisplayRow {
+	items := allSettings()
+	var rows []settingsDisplayRow
+	curSec := ""
+	for i, it := range items {
+		if it.section != curSec {
+			curSec = it.section
+			rows = append(rows, settingsDisplayRow{isHeader: true, section: curSec})
+		}
+		rows = append(rows, settingsDisplayRow{isHeader: false, itemIdx: i})
+	}
+	return rows
+}
+
+// selectedRowIndex returns the index in displayRows() corresponding to s.cursor.
+func (a *App) selectedRowIndex() int {
+	rows := a.displayRows()
+	for i, r := range rows {
+		if !r.isHeader && r.itemIdx == a.settings.cursor {
+			return i
+		}
+	}
+	return 0
+}
+
+// updateSettings handles messages the pane takes for itself while open.
 func (a *App) updateSettings(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
+	case templateEditorFinishedMsg:
+		return a.handleTemplateEditorFinished(msg), true
 	case tea.KeyPressMsg:
 		return a.handleSettingsKey(msg), true
 	case tea.PasteMsg:
+		if a.settings.mode == settingsModeEdit {
+			var cmd tea.Cmd
+			a.settings.input, cmd = a.settings.input.Update(msg)
+			return cmd, true
+		}
 		return nil, true
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -109,50 +203,593 @@ func (a *App) updateSettings(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// handleSettingsKey applies a key press to the open pane.
+// handleSettingsKey applies a key press based on current settings mode.
 func (a *App) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch a.settings.mode {
+	case settingsModeEdit:
+		return a.handleEditKey(msg)
+	case settingsModeTemplate:
+		return a.handleTemplateKey(msg)
+	case settingsModeSubPane:
+		return a.handleSubPaneKey(msg)
+	default:
+		return a.handleNormalKey(msg)
+	}
+}
+
+// handleNormalKey handles navigation, toggles, steppers, and mode transitions.
+func (a *App) handleNormalKey(msg tea.KeyPressMsg) tea.Cmd {
 	keys := a.settings.keys
+	items := allSettings()
+	if len(items) == 0 {
+		return nil
+	}
+	item := items[a.settings.cursor]
+
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return tea.Quit
 	case key.Matches(msg, keys.Close):
 		a.closeSettings()
+		return nil
 	case key.Matches(msg, keys.Toggle):
-		return a.toggleSetting()
+		return a.handleToggleOrAction(item, msg)
+	case key.Matches(msg, keys.Edit):
+		return a.handleEditAction(item)
+	case key.Matches(msg, keys.CycleNext):
+		return a.handleStepOrCycle(item, 1)
+	case key.Matches(msg, keys.CyclePrev):
+		return a.handleStepOrCycle(item, -1)
+	case key.Matches(msg, keys.StepUp):
+		return a.handleStepOrCycle(item, 1)
+	case key.Matches(msg, keys.StepDown):
+		return a.handleStepOrCycle(item, -1)
+	case key.Matches(msg, keys.Default):
+		return a.resetCurrentSetting(item)
+	case key.Matches(msg, keys.NextSec):
+		a.jumpSection(1)
+		return nil
+	case key.Matches(msg, keys.PrevSec):
+		a.jumpSection(-1)
+		return nil
 	case key.Matches(msg, keys.Test):
 		return a.testNotification()
 	case key.Matches(msg, keys.Up):
 		a.moveSettings(-1)
 	case key.Matches(msg, keys.Down):
 		a.moveSettings(1)
+	case key.Matches(msg, keys.Top):
+		a.settings.cursor = 0
+		a.settings.notice, a.settings.noticeErr = "", false
+		a.clampSettingsScroll()
+	case key.Matches(msg, keys.Bottom):
+		a.settings.cursor = len(items) - 1
+		a.settings.notice, a.settings.noticeErr = "", false
+		a.clampSettingsScroll()
 	}
 	return nil
 }
 
-// clickSettings toggles the setting a left click lands on. A click anywhere
-// else lands on the pane and does nothing, rather than on the list behind it.
+// handleToggleOrAction executes space / x / enter toggle actions.
+func (a *App) handleToggleOrAction(item settingDescriptor, msg tea.KeyPressMsg) tea.Cmd {
+	switch item.kind {
+	case settingKindBool:
+		if item.toggle != nil {
+			return item.toggle(a)
+		}
+	case settingKindEnum:
+		if item.cycle != nil {
+			return item.cycle(a, 1)
+		}
+	case settingKindTemplate:
+		a.settings.mode = settingsModeTemplate
+		a.settings.templateScroll = 0
+		return nil
+	case settingKindMap, settingKindList:
+		return a.openSubPane(item)
+	case settingKindDuration, settingKindInt, settingKindString:
+		if msg.String() == "enter" {
+			return a.startInlineEdit(item)
+		}
+	}
+	return nil
+}
+
+// handleEditAction handles enter / e on setting items.
+func (a *App) handleEditAction(item settingDescriptor) tea.Cmd {
+	switch item.kind {
+	case settingKindBool:
+		if item.toggle != nil {
+			return item.toggle(a)
+		}
+	case settingKindEnum:
+		if item.cycle != nil {
+			return item.cycle(a, 1)
+		}
+	case settingKindDuration, settingKindInt, settingKindString:
+		return a.startInlineEdit(item)
+	case settingKindTemplate:
+		a.settings.mode = settingsModeTemplate
+		a.settings.templateScroll = 0
+		return nil
+	case settingKindMap, settingKindList:
+		return a.openSubPane(item)
+	}
+	return nil
+}
+
+// handleStepOrCycle steps numeric values or cycles enums.
+func (a *App) handleStepOrCycle(item settingDescriptor, delta int) tea.Cmd {
+	switch item.kind {
+	case settingKindEnum:
+		if item.cycle != nil {
+			return item.cycle(a, delta)
+		}
+	case settingKindDuration, settingKindInt:
+		if item.step != nil {
+			return item.step(a, delta)
+		}
+	}
+	return nil
+}
+
+// startInlineEdit switches the pane into inline text editing mode.
+func (a *App) startInlineEdit(item settingDescriptor) tea.Cmd {
+	a.settings.mode = settingsModeEdit
+	a.settings.input.SetValue(item.getRaw(a))
+	a.settings.input.CursorEnd()
+	return a.settings.input.Focus()
+}
+
+// handleEditKey processes input during inline text editing.
+func (a *App) handleEditKey(msg tea.KeyPressMsg) tea.Cmd {
+	items := allSettings()
+	item := items[a.settings.cursor]
+
+	switch msg.String() {
+	case "esc":
+		a.settings.mode = settingsModeNormal
+		a.settings.input.Blur()
+		return nil
+	case "enter":
+		val := a.settings.input.Value()
+		if item.saveInput != nil {
+			if err := item.saveInput(a, val); err != nil {
+				a.settings.setNotice("invalid value: "+err.Error(), true)
+				return nil
+			}
+		}
+		a.settings.mode = settingsModeNormal
+		a.settings.input.Blur()
+		return nil
+	default:
+		var cmd tea.Cmd
+		a.settings.input, cmd = a.settings.input.Update(msg)
+		return cmd
+	}
+}
+
+// handleTemplateKey processes keys in the template viewer.
+func (a *App) handleTemplateKey(msg tea.KeyPressMsg) tea.Cmd {
+	items := allSettings()
+	item := items[a.settings.cursor]
+	isCheck := item.id == "herdr.check_prompt"
+
+	switch msg.String() {
+	case "esc", "q":
+		a.settings.mode = settingsModeNormal
+		return nil
+	case "e":
+		return a.editTemplateInEditor(isCheck)
+	case "d":
+		if item.reset != nil {
+			_ = item.reset(a)
+			a.settings.setNotice("template reset to default · saved", false)
+		}
+		return nil
+	case "up", "k":
+		if a.settings.templateScroll > 0 {
+			a.settings.templateScroll--
+		}
+		return nil
+	case "down", "j":
+		a.settings.templateScroll++
+		return nil
+	}
+	return nil
+}
+
+// editTemplateInEditor spawns $EDITOR for editing templates.
+func (a *App) editTemplateInEditor(isCheck bool) tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = "nano"
+	}
+
+	content := a.homeCfg.Herdr.Prompt
+	prefix := "prutil-prompt-*.tmpl"
+	if isCheck {
+		content = a.homeCfg.Herdr.CheckPrompt
+		prefix = "prutil-check-prompt-*.tmpl"
+	}
+
+	tmp, err := os.CreateTemp("", prefix)
+	if err != nil {
+		a.settings.setNotice("could not create temporary file: "+err.Error(), true)
+		return nil
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		a.settings.setNotice("could not write temporary file: "+err.Error(), true)
+		return nil
+	}
+	_ = tmp.Close()
+
+	parts := strings.Fields(editor)
+	cmdName := parts[0]
+	args := append(parts[1:], tmpName)
+	c := exec.Command(cmdName, args...)
+
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return templateEditorFinishedMsg{
+			tmpFile: tmpName,
+			isCheck: isCheck,
+			err:     err,
+		}
+	})
+}
+
+// handleTemplateEditorFinished parses and saves template changes from $EDITOR.
+func (a *App) handleTemplateEditorFinished(msg templateEditorFinishedMsg) tea.Cmd {
+	defer func() { _ = os.Remove(msg.tmpFile) }()
+	if msg.err != nil {
+		a.settings.setNotice("editor failed: "+msg.err.Error(), true)
+		return nil
+	}
+	data, err := os.ReadFile(msg.tmpFile)
+	if err != nil {
+		a.settings.setNotice("could not read edited template: "+err.Error(), true)
+		return nil
+	}
+	newContent := strings.TrimRight(string(data), "\r\n")
+	if msg.isCheck {
+		if _, err := template.New("check_prompt").Parse(newContent); err != nil {
+			a.settings.setNotice("invalid template syntax: "+err.Error(), true)
+			return nil
+		}
+		a.homeCfg.Herdr.CheckPrompt = newContent
+		if a.store != nil {
+			if err := a.store.SaveBlockScalar([]string{"herdr", "check_prompt"}, newContent, func(c *home.Config) {
+				c.Herdr.CheckPrompt = newContent
+			}); err != nil {
+				a.settings.setNotice("could not save template: "+err.Error(), true)
+				return nil
+			}
+		}
+		a.settings.setNotice("check prompt template updated · saved", false)
+	} else {
+		if _, err := template.New("prompt").Parse(newContent); err != nil {
+			a.settings.setNotice("invalid template syntax: "+err.Error(), true)
+			return nil
+		}
+		a.homeCfg.Herdr.Prompt = newContent
+		if a.store != nil {
+			if err := a.store.SaveBlockScalar([]string{"herdr", "prompt"}, newContent, func(c *home.Config) {
+				c.Herdr.Prompt = newContent
+			}); err != nil {
+				a.settings.setNotice("could not save template: "+err.Error(), true)
+				return nil
+			}
+		}
+		a.settings.setNotice("prompt template updated · saved", false)
+	}
+	return nil
+}
+
+// openSubPane initializes and opens the sub-pane for collections.
+func (a *App) openSubPane(item settingDescriptor) tea.Cmd {
+	var kind subPaneType
+	switch item.id {
+	case "repos":
+		kind = subPaneRepos
+	case "review.repos":
+		kind = subPaneReviewRepos
+	case "discovery.roots":
+		kind = subPaneDiscoveryRoots
+	}
+	if kind == subPaneNone {
+		return nil
+	}
+
+	ki := textinput.New()
+	ki.Prompt = "key: "
+	ki.SetStyles(a.styles.helpInput())
+
+	vi := textinput.New()
+	vi.Prompt = "val: "
+	vi.SetStyles(a.styles.helpInput())
+
+	a.settings.mode = settingsModeSubPane
+	a.settings.subPane = subPaneState{
+		kind:     kind,
+		cursor:   0,
+		keyInput: ki,
+		valInput: vi,
+	}
+	return nil
+}
+
+// handleSubPaneKey processes keys inside the maps/lists sub-pane.
+func (a *App) handleSubPaneKey(msg tea.KeyPressMsg) tea.Cmd {
+	sp := &a.settings.subPane
+	if sp.adding || sp.editing {
+		return a.handleSubPaneInputKey(msg)
+	}
+
+	keys := a.subPaneEntries()
+	count := len(keys)
+
+	switch msg.String() {
+	case "esc", "q":
+		a.settings.mode = settingsModeNormal
+		return nil
+	case "up", "k":
+		if sp.cursor > 0 {
+			sp.cursor--
+		}
+		return nil
+	case "down", "j":
+		if sp.cursor < count-1 {
+			sp.cursor++
+		}
+		return nil
+	case "a":
+		sp.adding = true
+		sp.editing = false
+		sp.keyInput.SetValue("")
+		sp.valInput.SetValue("")
+		sp.activeIdx = 0
+		return sp.keyInput.Focus()
+	case "d", "x":
+		if count > 0 && sp.cursor < count {
+			return a.deleteSubPaneEntry(keys[sp.cursor])
+		}
+	}
+	return nil
+}
+
+// handleSubPaneInputKey handles input fields while adding/editing entries.
+func (a *App) handleSubPaneInputKey(msg tea.KeyPressMsg) tea.Cmd {
+	sp := &a.settings.subPane
+	switch msg.String() {
+	case "esc":
+		sp.adding = false
+		sp.editing = false
+		return nil
+	case "tab":
+		if sp.kind != subPaneDiscoveryRoots {
+			sp.activeIdx = 1 - sp.activeIdx
+			if sp.activeIdx == 0 {
+				sp.valInput.Blur()
+				return sp.keyInput.Focus()
+			}
+			sp.keyInput.Blur()
+			return sp.valInput.Focus()
+		}
+	case "enter":
+		if sp.kind == subPaneDiscoveryRoots {
+			val := strings.TrimSpace(sp.valInput.Value())
+			if val == "" {
+				val = strings.TrimSpace(sp.keyInput.Value())
+			}
+			if val != "" {
+				roots := append([]string{}, a.homeCfg.Discovery.Roots...)
+				roots = append(roots, val)
+				a.homeCfg.Discovery.Roots = roots
+				if a.store != nil {
+					_ = a.store.SaveSequence([]string{"discovery", "roots"}, roots, func(c *home.Config) {
+						c.Discovery.Roots = roots
+					})
+				}
+				a.settings.setNotice(fmt.Sprintf("Added discovery root %q · saved", val), false)
+			}
+			sp.adding = false
+			return nil
+		}
+
+		// Map entry addition
+		k := strings.TrimSpace(sp.keyInput.Value())
+		v := strings.TrimSpace(sp.valInput.Value())
+		if k != "" && v != "" {
+			switch sp.kind {
+			case subPaneRepos:
+				if a.homeCfg.Repos == nil {
+					a.homeCfg.Repos = map[string]string{}
+				}
+				a.homeCfg.Repos[k] = v
+				if a.store != nil {
+					_ = a.store.SaveMapEntry([]string{"repos"}, k, v, func(c *home.Config) {
+						if c.Repos == nil {
+							c.Repos = map[string]string{}
+						}
+						c.Repos[k] = v
+					})
+				}
+				a.settings.setNotice(fmt.Sprintf("Saved repo path %s -> %s · saved", k, v), false)
+			case subPaneReviewRepos:
+				if a.homeCfg.Review.Repos == nil {
+					a.homeCfg.Review.Repos = map[string]string{}
+				}
+				a.homeCfg.Review.Repos[k] = v
+				if a.store != nil {
+					_ = a.store.SaveMapEntry([]string{"review", "repos"}, k, v, func(c *home.Config) {
+						if c.Review.Repos == nil {
+							c.Review.Repos = map[string]string{}
+						}
+						c.Review.Repos[k] = v
+					})
+				}
+				a.settings.setNotice(fmt.Sprintf("Saved review trigger for %s · saved", k), false)
+			}
+		}
+		sp.adding = false
+		return nil
+	default:
+		if sp.activeIdx == 0 {
+			var cmd tea.Cmd
+			sp.keyInput, cmd = sp.keyInput.Update(msg)
+			return cmd
+		}
+		var cmd tea.Cmd
+		sp.valInput, cmd = sp.valInput.Update(msg)
+		return cmd
+	}
+	return nil
+}
+
+// subPaneEntries returns list of entry labels for active subPane.
+func (a *App) subPaneEntries() []string {
+	sp := a.settings.subPane
+	switch sp.kind {
+	case subPaneRepos:
+		keys := slices.Sorted(maps.Keys(a.homeCfg.Repos))
+		return keys
+	case subPaneReviewRepos:
+		keys := slices.Sorted(maps.Keys(a.homeCfg.Review.Repos))
+		return keys
+	case subPaneDiscoveryRoots:
+		return a.homeCfg.Discovery.Roots
+	}
+	return nil
+}
+
+// deleteSubPaneEntry removes the selected item from map or sequence.
+func (a *App) deleteSubPaneEntry(entry string) tea.Cmd {
+	sp := &a.settings.subPane
+	switch sp.kind {
+	case subPaneRepos:
+		delete(a.homeCfg.Repos, entry)
+		if a.store != nil {
+			_ = a.store.DeleteMapEntry([]string{"repos"}, entry, func(c *home.Config) {
+				delete(c.Repos, entry)
+			})
+		}
+		a.settings.setNotice(fmt.Sprintf("Deleted repository path %q · saved", entry), false)
+	case subPaneReviewRepos:
+		delete(a.homeCfg.Review.Repos, entry)
+		if a.store != nil {
+			_ = a.store.DeleteMapEntry([]string{"review", "repos"}, entry, func(c *home.Config) {
+				delete(c.Review.Repos, entry)
+			})
+		}
+		a.settings.setNotice(fmt.Sprintf("Deleted review trigger for %q · saved", entry), false)
+	case subPaneDiscoveryRoots:
+		var roots []string
+		for _, r := range a.homeCfg.Discovery.Roots {
+			if r != entry {
+				roots = append(roots, r)
+			}
+		}
+		a.homeCfg.Discovery.Roots = roots
+		if a.store != nil {
+			_ = a.store.SaveSequence([]string{"discovery", "roots"}, roots, func(c *home.Config) {
+				c.Discovery.Roots = roots
+			})
+		}
+		a.settings.setNotice(fmt.Sprintf("Deleted discovery root %q · saved", entry), false)
+	}
+	if sp.cursor > 0 {
+		sp.cursor--
+	}
+	return nil
+}
+
+// resetCurrentSetting restores default value for current setting.
+func (a *App) resetCurrentSetting(item settingDescriptor) tea.Cmd {
+	if item.reset != nil {
+		if err := item.reset(a); err != nil {
+			a.settings.setNotice("could not reset setting: "+err.Error(), true)
+			return nil
+		}
+	}
+	a.settings.setNotice(fmt.Sprintf("%s reset to default · saved", item.title), false)
+	return nil
+}
+
+// jumpSection moves the selection to the next or previous section.
+func (a *App) jumpSection(delta int) {
+	items := allSettings()
+	curSec := items[a.settings.cursor].section
+	if delta > 0 {
+		for i := a.settings.cursor + 1; i < len(items); i++ {
+			if items[i].section != curSec {
+				a.settings.cursor = i
+				a.settings.notice, a.settings.noticeErr = "", false
+				a.clampSettingsScroll()
+				return
+			}
+		}
+	} else {
+		// Jump to start of current section if not already there, else previous section
+		firstInCurSec := a.settings.cursor
+		for i := a.settings.cursor - 1; i >= 0; i-- {
+			if items[i].section == curSec {
+				firstInCurSec = i
+			} else {
+				break
+			}
+		}
+		if a.settings.cursor > firstInCurSec {
+			a.settings.cursor = firstInCurSec
+		} else if firstInCurSec > 0 {
+			prevSec := items[firstInCurSec-1].section
+			for i := firstInCurSec - 1; i >= 0; i-- {
+				if items[i].section == prevSec {
+					a.settings.cursor = i
+				} else {
+					break
+				}
+			}
+		}
+		a.settings.notice, a.settings.noticeErr = "", false
+		a.clampSettingsScroll()
+	}
+}
+
+// clickSettings toggles or selects the setting a left click lands on.
 func (a *App) clickSettings(msg tea.MouseClickMsg) tea.Cmd {
 	if msg.Button != tea.MouseLeft {
 		return nil
 	}
 	l := a.settingsLayout()
-	// The rows start beneath the top edge and the section heading.
-	row := msg.Y - l.y - 2
+	row := msg.Y - l.y - 1
 	if msg.X < l.x || msg.X >= l.x+l.width || row < 0 || row >= l.window {
 		return nil
 	}
+	dispRows := a.displayRows()
 	index := a.settings.offset + row
-	if index >= len(notifications) {
+	if index >= len(dispRows) {
 		return nil
 	}
-	a.settings.cursor = index
-	return a.toggleSetting()
+	target := dispRows[index]
+	if target.isHeader {
+		return nil
+	}
+	a.settings.cursor = target.itemIdx
+	items := allSettings()
+	return a.handleToggleOrAction(items[target.itemIdx], tea.KeyPressMsg{})
 }
 
-// moveSettings steps the selection by delta, clamped to the list.
+// moveSettings steps the selection by delta, clamped to the settings list.
 func (a *App) moveSettings(delta int) {
 	s := &a.settings
-	cursor := min(max(s.cursor+delta, 0), len(notifications)-1)
+	items := allSettings()
+	cursor := min(max(s.cursor+delta, 0), len(items)-1)
 	if cursor != s.cursor {
 		s.notice, s.noticeErr = "", false
 	}
@@ -160,45 +797,12 @@ func (a *App) moveSettings(delta int) {
 	a.clampSettingsScroll()
 }
 
-// clampSettingsScroll keeps the selected row inside the drawn window.
+// clampSettingsScroll keeps the selected display row inside the drawn window.
 func (a *App) clampSettingsScroll() {
 	s := &a.settings
-	s.offset = clampOffset(s.offset, s.cursor, a.settingsLayout().window, len(notifications))
-}
-
-// toggleSetting turns the selected notification on or off and saves it.
-//
-// The change applies straight away whether or not it could be saved, and the
-// notice says which: a reader who cannot save still wants the notification
-// they just asked for, for as long as this prutil runs.
-func (a *App) toggleSetting() tea.Cmd {
-	kind := notifications[a.settings.cursor]
-	on := !a.homeCfg.Notifications.Enabled(kind.event)
-	a.homeCfg.Notifications.Set(kind.event, on)
-
-	state := "off"
-	if on {
-		state = "on"
-	}
-	switch err := a.saveNotification(kind.event, on); {
-	case err != nil:
-		a.settings.setNotice(fmt.Sprintf("%s is %s until prutil quits, but was not saved: %s", kind.setting, state, err), true)
-	case on && a.settings.unavailable != "":
-		a.settings.setNotice(fmt.Sprintf("%s is on and saved, but nothing will appear: %s", kind.setting, a.settings.unavailable), true)
-	default:
-		a.settings.setNotice(fmt.Sprintf("%s is %s · saved", kind.setting, state), false)
-	}
-	// Starts the reads when this was the first notification turned on. The
-	// last one turned off ends them at the next wake-up, with no request.
-	return a.scheduleNotifications()
-}
-
-// saveNotification writes one setting to the configuration file.
-func (a *App) saveNotification(event home.NotificationEvent, on bool) error {
-	if a.store == nil {
-		return a.storeErr
-	}
-	return a.store.SetNotification(event, on)
+	dispRows := a.displayRows()
+	targetRow := a.selectedRowIndex()
+	s.offset = clampOffset(s.offset, targetRow, a.settingsLayout().window, len(dispRows))
 }
 
 // setNotice replaces what the pane says about the last thing it did.
@@ -206,8 +810,7 @@ func (s *settingsPane) setNotice(text string, isErr bool) {
 	s.notice, s.noticeErr = text, isErr
 }
 
-// testNotification shows a sample notification, which is the quickest way to
-// find out whether the operating system will show prutil's at all.
+// testNotification shows a sample notification.
 func (a *App) testNotification() tea.Cmd {
 	if a.notifier == nil {
 		a.settings.setNotice("prutil cannot show desktop notifications here", true)
@@ -223,8 +826,7 @@ func (a *App) testNotification() tea.Cmd {
 	}
 }
 
-// applySettingsTest reports how the test notification went, in the pane if it
-// is still open and on the status line if not.
+// applySettingsTest reports how the test notification went.
 func (a *App) applySettingsTest(msg settingsTestMsg) tea.Cmd {
 	text, isErr := "sent a test notification", false
 	if msg.err != nil {
@@ -239,8 +841,7 @@ func (a *App) applySettingsTest(msg settingsTestMsg) tea.Cmd {
 	return nil
 }
 
-// settingsLayout sizes and places the pane for the current terminal, giving
-// up the explanation first and then half the notice when height is short.
+// settingsLayout sizes and places the pane for the current terminal.
 func (a *App) settingsLayout() settingsLayout {
 	l := settingsLayout{width: a.width, detail: true, noticeLines: settingsNoticeLines}
 	room := a.height
@@ -250,7 +851,7 @@ func (a *App) settingsLayout() settingsLayout {
 	}
 	l.inner = max(l.width-4, 1)
 
-	rows := len(notifications)
+	dispRows := len(a.displayRows())
 	fixed := func() int {
 		n := settingsChrome + l.noticeLines
 		if l.detail {
@@ -258,13 +859,13 @@ func (a *App) settingsLayout() settingsLayout {
 		}
 		return n
 	}
-	if fixed()+rows > room {
+	if fixed()+dispRows > room {
 		l.detail = false
 	}
-	if fixed()+rows > room {
+	if fixed()+dispRows > room {
 		l.noticeLines = 1
 	}
-	l.window = max(min(rows, room-fixed()), 1)
+	l.window = max(min(dispRows, room-fixed()), 1)
 	l.height = fixed() + l.window
 	l.x = max((a.width-l.width)/2, 0)
 	l.y = max((a.height-l.height)/2, 0)
@@ -277,26 +878,38 @@ func (a *App) renderSettings(base []string) []string {
 	return a.floatOver(base, a.settingsBox(l), l.x, l.y, l.width)
 }
 
-// settingsBox draws the pane itself, frame and all, as l.height lines of
-// l.width columns.
+// settingsBox draws the pane container and its content lines.
 func (a *App) settingsBox(l settingsLayout) []string {
 	s := &a.settings
 	box := make([]string, 0, l.height)
 	box = append(box,
 		a.edge(l.width, "╭", "╮", a.styles.OverlayTitle.Render("Settings"), a.styles.Muted.Render(a.configLabel())),
-		a.frameRow("  "+a.styles.SectionHdr.Render("DESKTOP NOTIFICATIONS"), l.inner),
 	)
+
+	dispRows := a.displayRows()
+	items := allSettings()
+
 	for i := 0; i < l.window; i++ {
 		line, index := "", s.offset+i
-		if index < len(notifications) {
-			line = a.settingLine(notifications[index], index == s.cursor, l.inner)
+		if index < len(dispRows) {
+			row := dispRows[index]
+			if row.isHeader {
+				line = "  " + a.styles.SectionHdr.Render(row.section)
+			} else {
+				item := items[row.itemIdx]
+				line = a.settingLine(item, row.itemIdx == s.cursor, l.inner)
+			}
 		}
 		box = append(box, a.frameRow(line, l.inner))
 	}
 
 	if l.detail {
 		box = append(box, a.frameRule(l.width))
-		lines := wrapLines(notifications[s.cursor].detail, l.inner, settingsDetailLines)
+		curDetail := ""
+		if s.cursor < len(items) {
+			curDetail = items[s.cursor].detail
+		}
+		lines := wrapLines(curDetail, l.inner, settingsDetailLines)
 		for i := 0; i < settingsDetailLines; i++ {
 			text := ""
 			if i < len(lines) {
@@ -319,27 +932,40 @@ func (a *App) settingsBox(l settingsLayout) []string {
 	return append(box, a.edge(l.width, "╰", "╯", a.settingsHints(), ""))
 }
 
-// settingLine draws one toggle: the selection bar, a box that is ticked when
-// the notification is on, its name, and on or off at the far end, so the state
-// is written out as well as coloured.
-func (a *App) settingLine(n notification, selected bool, width int) string {
+// settingLine renders an individual setting item row.
+func (a *App) settingLine(item settingDescriptor, selected bool, width int) string {
 	prefix, titleStyle := "  ", a.styles.Text
 	if selected {
 		prefix, titleStyle = a.styles.SelectBar.Render("▌")+" ", a.styles.Title
 	}
-	box, state, stateStyle := "[ ]", "off", a.styles.Muted
-	if a.homeCfg.Notifications.Enabled(n.event) {
-		box, state, stateStyle = "[✓]", "on", a.styles.Success
+
+	box, state, stateStyle := "   ", item.getDisplay(a), a.styles.Accent
+	if item.kind == settingKindBool {
+		if item.isEnabled != nil && item.isEnabled(a) {
+			box, state, stateStyle = "[✓]", "on", a.styles.Success
+		} else {
+			box, state, stateStyle = "[ ]", "off", a.styles.Muted
+		}
+	} else if item.isDefault != nil && item.isDefault(a) {
+		stateStyle = a.styles.Muted
+	}
+
+	if selected && a.settings.mode == settingsModeEdit {
+		inputView := a.settings.input.View()
+		room := max(width-2-lenOf(box)-1, 1)
+		title := titleStyle.Render(truncatePlain(item.title, max(room-lenOf(inputView)-4, 1)))
+		return prefix + box + " " + justify(room, title, a.styles.Title.Render(inputView))
 	}
 
 	room := max(width-2-lenOf(box)-1, 1)
-	title := titleStyle.Render(truncatePlain(n.setting, max(room-lenOf(state)-2, 1)))
-	return prefix + stateStyle.Render(box) + " " + justify(room, title, stateStyle.Render(state))
+	title := titleStyle.Render(truncatePlain(item.title, max(room-lenOf(state)-2, 1)))
+	if item.kind == settingKindBool {
+		return prefix + stateStyle.Render(box) + " " + justify(room, title, stateStyle.Render(state))
+	}
+	return prefix + box + " " + justify(room, title, stateStyle.Render(state))
 }
 
-// settingsNotice is what the notice lines say, in order of what matters: what
-// the last key did, then why nothing would appear, then a failed read, and
-// otherwise how the pane works.
+// settingsNotice returns current status notice and style.
 func (a *App) settingsNotice() (string, lipgloss.Style) {
 	s := &a.settings
 	switch {
@@ -370,8 +996,7 @@ func humanInterval(d time.Duration) string {
 	return model.HumanDuration(d)
 }
 
-// configLabel names the file the pane saves to, with the home directory
-// written as ~ so that it fits in the frame.
+// configLabel names the file the pane saves to.
 func (a *App) configLabel() string {
 	if a.store == nil {
 		return "not saved"
@@ -385,13 +1010,14 @@ func (a *App) configLabel() string {
 	return path
 }
 
-// settingsHints names the pane's own keys, for its bottom edge.
+// settingsHints names key combinations for the pane's bottom edge.
 func (a *App) settingsHints() string {
 	k := a.settings.keys
 	pairs := []key.Help{
 		{Key: k.Up.Help().Key + k.Down.Help().Key, Desc: "select"},
 		k.Toggle.Help(),
-		k.Test.Help(),
+		k.Default.Help(),
+		k.NextSec.Help(),
 		k.Close.Help(),
 	}
 	parts := make([]string, 0, len(pairs))
