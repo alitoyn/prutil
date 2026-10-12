@@ -254,8 +254,8 @@ Each press does one thing, once, whether or not the pull request is watched.
 
 Below 80 columns the two panes collapse into one: the list fills the terminal,
 clicking a row selects it, `l` swaps to detail, and `h` swaps back. When WATCH
-is available, select it above CHECKS and press `l` or `enter` again to see its
-full schedule, activity and handoff details.
+is shown, the detail pane opens with it selected; press `l` or `enter` again to
+see its full schedule, activity and handoff details.
 
 The footer has one line, so it lists the actions and leaves moving about to the
 arrow keys. `?` opens an overlay listing every shortcut with a sentence on what
@@ -578,7 +578,8 @@ next check; work currently in flight; a bounded activity feed from this TUI
 session; and the three most recent durable handoff attempts for that pull
 request. The activity feed resets when prutil exits; `handoffs.jsonl` is the
 cross-session record. The `›` after the heading marks the fuller page behind
-it: select WATCH and press `l`, `→` or `enter` to open it. While WATCH is
+it. Focusing the detail pane selects WATCH, the topmost item, so pressing `l`,
+`→` or `enter` again opens it, and `j` moves on to the checks. While WATCH is
 selected, the heading and the footer both say `watch log`.
 
 ### What the watching costs

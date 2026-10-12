@@ -861,17 +861,56 @@ func TestTheDetailExplainsTheCurrentWatchScheduleAndActivity(t *testing.T) {
 	assert.Contains(t, screen, "started watching")
 }
 
+func TestTheDetailPaneShowsOneChipAndOnlyOnceItHasTheFocus(t *testing.T) {
+	chips := func(app *App) []string {
+		var marked []string
+		for _, line := range detailColumn(plain(app.render())) {
+			if strings.HasPrefix(line, "▌") {
+				marked = append(marked, line)
+			}
+		}
+		return marked
+	}
+
+	for _, tc := range []struct {
+		name    string
+		watched bool
+		want    string
+	}{
+		{name: "A watched pull request's detail pane lands on its WATCH heading.", watched: true, want: "▌ WATCH › watch log"},
+		{name: "One with no WATCH section lands on its first check.", watched: false, want: "▌ ✓ test · CI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _, _ := newTestApp(t, 120, 40)
+			if tc.watched {
+				send(t, app, press("w"))
+			}
+			assert.Empty(t, chips(app), "nothing in the detail pane is selected while the list has the focus")
+
+			send(t, app, press("l"))
+			marked := chips(app)
+			require.Len(t, marked, 1, "one mark for the one thing selected, so CHECKS carries none of its own")
+			assert.True(t, strings.HasPrefix(marked[0], tc.want), "the chip is on %q, not %q", tc.want, marked[0])
+
+			send(t, app, press("h"))
+			assert.Empty(t, chips(app), "and it goes again when the focus leaves")
+		})
+	}
+}
+
 func TestTheWatchSectionCanBeSelectedAndDrilledInto(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
 
 	send(t, app, press("w"))
 	send(t, app, press("l"))
 	require.Equal(t, paneDetail, app.focus)
-	require.Equal(t, detailChecks, app.section)
+	require.Equal(t, detailWatch, app.section, "focus lands on the topmost item, which is WATCH")
+	assert.Contains(t, plain(app.render()), "▌ WATCH")
 
+	send(t, app, press("j"))
+	assert.Equal(t, detailChecks, app.section)
 	send(t, app, press("k"))
 	assert.Equal(t, detailWatch, app.section)
-	assert.Contains(t, plain(app.render()), "▌ WATCH")
 
 	send(t, app, press("l"))
 	assert.Equal(t, detailWatchPage, app.page)
@@ -1282,17 +1321,23 @@ func TestTheWatchHeadingDropsItsHintBeforeItsName(t *testing.T) {
 func TestTheFooterSaysWhereRightGoesOnTheWatchHeading(t *testing.T) {
 	app, _, _ := newTestApp(t, 120, 40)
 	send(t, app, press("w"))
-	send(t, app, press("l"))
 	footer := plain(strings.Join(app.footerLines(), "\n"))
-	assert.Contains(t, footer, "→/l detail", "on a check, → is the ordinary binding")
+	assert.Contains(t, footer, "→/l detail", "in the list, → is the ordinary binding")
 
-	send(t, app, press("k"))
+	send(t, app, press("l"))
 	require.Equal(t, detailWatch, app.section)
 	footer = plain(strings.Join(app.footerLines(), "\n"))
 	assert.Contains(t, footer, "→/l watch log")
 	assert.Contains(t, footer, "q quit", "the longer label still fits at 120 columns")
 	assert.NotContains(t, footer, "…")
 	assert.Equal(t, "detail", app.keys.Into.Help().Desc, "the key map itself is left alone")
+
+	send(t, app, press("j"))
+	require.Equal(t, detailChecks, app.section)
+	footer = plain(strings.Join(app.footerLines(), "\n"))
+	assert.Contains(t, footer, "→/l detail", "on a check, → is the ordinary binding")
+
+	send(t, app, press("k"))
 
 	send(t, app, press("l"))
 	require.Equal(t, detailWatchPage, app.page)
@@ -1820,7 +1865,6 @@ func onFailedCheck(t *testing.T, app *App) {
 	t.Helper()
 	send(t, app, press("l"))
 	require.Equal(t, paneDetail, app.focus)
-	require.Equal(t, detailChecks, app.section)
 	for range 4 {
 		if app.selectedFailedCheck() {
 			return

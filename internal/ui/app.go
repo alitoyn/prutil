@@ -884,6 +884,9 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if a.focus == paneList && len(a.cur().prs) > 0 {
 			a.focus = paneDetail
 			a.resetDetailNavigation()
+			// The selection starts at the top, which is WATCH when it is shown,
+			// so the chip lands on the first thing the eye reaches.
+			a.setDetailIndex(0)
 			return a, a.withSpinner(a.ensureChecks(a.selectedKey()))
 		}
 		if a.focus == paneDetail {

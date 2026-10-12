@@ -28,7 +28,8 @@ func (a *App) renderDetail(width, height int) []string {
 	// Keep a check heading and at least one check line visible below watcher
 	// diagnostics, even in a short terminal.
 	watchBudget := max(height-len(lines)-4, 0)
-	if watch := a.watchDetail(pr, width, watchBudget, a.section == detailWatch); len(watch) > 0 {
+	focused := a.focus == paneDetail
+	if watch := a.watchDetail(pr, width, watchBudget, focused && a.section == detailWatch); len(watch) > 0 {
 		lines = append(lines, watch...)
 		lines = append(lines, "")
 	}
@@ -49,8 +50,15 @@ func (a *App) renderDetail(width, height int) []string {
 		return lines
 	}
 
-	lines = append(lines, a.sectionHeading(fmt.Sprintf("CHECKS (%d)", len(state.checks)),
-		a.section == detailChecks))
+	// The chip goes on the check that is selected rather than on its heading
+	// as well, so there is one mark for the one thing selected. The heading
+	// brightens to say which section the cursor is in.
+	checksHeading := fmt.Sprintf("CHECKS (%d)", len(state.checks))
+	if focused && a.section == detailChecks {
+		lines = append(lines, sectionPad+a.styles.Title.Render(checksHeading))
+	} else {
+		lines = append(lines, a.sectionHeading(checksHeading, false))
+	}
 
 	window := checkWindow(height, len(lines))
 	start := min(a.detailOffset, max(len(state.checks)-1, 0))
@@ -74,7 +82,9 @@ const sectionIndent = 2
 // sectionPad is sectionIndent as the spaces it takes.
 var sectionPad = strings.Repeat(" ", sectionIndent)
 
-// sectionHeading renders one of the selectable detail sections.
+// sectionHeading renders one of the detail sections. selected puts the chip
+// on it, which is only ever right while the detail pane has the focus: a chip
+// drawn before then leaves → with nothing visible to change.
 func (a *App) sectionHeading(text string, selected bool) string {
 	prefix := sectionPad
 	style := a.styles.SectionHdr
