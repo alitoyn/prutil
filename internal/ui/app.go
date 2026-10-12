@@ -504,6 +504,7 @@ func New(cfg Config) *App {
 		now:      now,
 		version:  cfg.Version,
 		keys:     defaultKeys(),
+		tray:     trayState{keys: defaultTrayKeys()},
 		styles:   styles,
 		help:     help.New(),
 		spin:     sp,
@@ -876,9 +877,8 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		a.toggleNotifications()
 		return a, nil
 
-	case msg.String() == "p" && a.focus == paneNotifications:
-		a.toggleSidebarMode()
-		return a, nil
+	case key.Matches(msg, a.keys.PinSidebar) && a.focus == paneNotifications:
+		return a, a.toggleSidebarMode()
 
 	case key.Matches(msg, a.keys.Into):
 		if a.focus == paneList && len(a.cur().prs) > 0 {
@@ -1007,12 +1007,15 @@ func (a *App) trayIndexAt(x, y int) (int, bool) {
 		return 0, false
 	}
 
-	bodyY := y - headerHeight - 2
+	bodyY := y - headerHeight - trayPaneHeader
 	if bodyY < 0 {
 		return 0, false
 	}
 
 	row := bodyY / trayRowHeight
+	if row >= a.traySidebarRows() {
+		return 0, false
+	}
 	index := a.tray.offset + row
 	if index < 0 || index >= len(a.tray.items) {
 		return 0, false
@@ -1149,9 +1152,8 @@ func (a *App) selectedTarget() (target, label string, ok bool) {
 		if pr, found := a.findPR(item.key); found && pr.URL != "" {
 			return pr.URL, item.key.String(), true
 		}
-		if item.key.Repo != "" && item.key.Number > 0 {
-			url := fmt.Sprintf("https://github.com/%s/pull/%d", item.key.Repo, item.key.Number)
-			return url, item.key.String(), true
+		if item.url != "" {
+			return item.url, item.key.String(), true
 		}
 		return "", "", false
 	}

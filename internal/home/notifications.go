@@ -145,14 +145,6 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 	})
 }
 
-// SetNotificationSidebar writes the notifications.sidebar setting into config.yaml,
-// and nothing else.
-func (s *Store) SetNotificationSidebar(on bool) error {
-	return s.SaveSetting([]string{"notifications", "sidebar"}, strconv.FormatBool(on), func(c *Config) {
-		c.Notifications.Sidebar = on
-	})
-}
-
 // SetWatchSelfReview writes the watch.self_review setting into config.yaml,
 // and nothing else.
 func (s *Store) SetWatchSelfReview(on bool) error {

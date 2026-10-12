@@ -23,6 +23,9 @@ const (
 	minListWidth = 30
 	// minTrayWidth is the narrowest useful notification tray pane.
 	minTrayWidth = 26
+	// minSidebarWidth is the narrowest terminal the notification sidebar is
+	// drawn in: every pane at its narrowest, and the gaps between them.
+	minSidebarWidth = minListWidth + minDetailWidth + minTrayWidth + 2*paneGap
 )
 
 // View implements tea.Model.
@@ -149,7 +152,7 @@ func (a *App) modeText() string {
 
 // sidebarVisible reports whether the notification history sidebar fits and is enabled.
 func (a *App) sidebarVisible() bool {
-	return a.homeCfg.Notifications.Sidebar && !a.narrow() && a.width >= 92
+	return a.homeCfg.Notifications.Sidebar && !a.narrow() && a.width >= minSidebarWidth
 }
 
 // renderBody draws the list and, when there is room, the detail pane beside it.

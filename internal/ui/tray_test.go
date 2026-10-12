@@ -2,13 +2,17 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/relloyd/prutil/internal/home"
 	"github.com/relloyd/prutil/internal/model"
 )
 
@@ -311,4 +315,167 @@ func TestRenderTrayRowLayout(t *testing.T) {
 	assert.Contains(t, selLines[0], "▌")
 	assert.Contains(t, selLines[1], "▌")
 	assert.Contains(t, selLines[2], "▌")
+}
+
+func TestCopyingInThePopupCopiesTheSelectedNotificationsPullRequest(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	require.Equal(t, 0, app.cur().cursor, "the list is on the first pull request")
+	target := app.cur().prs[2]
+	app.recordTrayNotification(target.Key(), target.Title, "approved", "", trayKindApproved)
+
+	send(t, app, press("n"))
+	drain(send(t, app, press("y")))
+
+	assert.False(t, app.tray.popupOpen, "copying closes the popup")
+	assert.Equal(t, []string{target.URL}, clipboardOf(t, app).copied())
+}
+
+func TestCtrlCQuitsWhileThePopupIsOpen(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	send(t, app, press("n"))
+	require.True(t, app.tray.popupOpen)
+
+	assert.Contains(t, drain(send(t, app, press("ctrl+c"))), tea.QuitMsg{})
+}
+
+func TestANotificationsAgeCountsInWholeMinutes(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	app.recordTrayNotification(app.cur().prs[0].Key(), "Title", "approved", "", trayKindApproved)
+	item := app.tray.items[0]
+
+	assert.Equal(t, "just now", app.trayItemAge(item))
+	advance(app, 5*time.Minute+30*time.Second)
+	assert.Equal(t, "5m", app.trayItemAge(item), "the clock only wakes each minute for an age, so it shows no seconds")
+}
+
+func TestAClickBelowTheSidebarsLastCardSelectsNothing(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	app.homeCfg.Notifications.Sidebar = true
+	for i := range 30 {
+		app.recordTrayNotification(model.Key{Repo: "relloyd/prutil", Number: 42}, "Title", fmt.Sprintf("note %d", i), "", trayKindDesktop)
+	}
+	focus, cursor := app.focus, app.cur().cursor
+
+	for y := headerHeight + trayPaneHeader + app.traySidebarRows()*trayRowHeight; y < 40; y++ {
+		send(t, app, click(app.width-5, y))
+	}
+
+	assert.Equal(t, focus, app.focus, "a click on the footer, or on the slack beneath the cards, does not focus the sidebar")
+	assert.Equal(t, cursor, app.cur().cursor)
+	assert.Equal(t, 0, app.tray.cursor)
+}
+
+func TestANotificationKeepsItsLinkAfterThePullRequestLeavesEveryView(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	gone := app.cur().prs[2]
+	gone.URL = "https://github.example.com/relloyd/third/pull/9"
+	app.views[viewOpen].prs[2] = gone
+	app.recordTrayNotification(gone.Key(), gone.Title, "approved", "", trayKindApproved)
+	app.recordTrayNotification(model.Key{Repo: "relloyd/never", Number: 1}, "Never listed", "approved", "", trayKindApproved)
+
+	app.views[viewOpen].prs = app.views[viewOpen].prs[:2]
+	app.clampScroll()
+
+	send(t, app, press("n"))
+	require.Equal(t, 0, app.tray.cursor, "the newest notification comes first")
+	drain(send(t, app, press("y")))
+	assert.Empty(t, clipboardOf(t, app).copied(), "a pull request prutil never had a link for is not given one it made up")
+
+	send(t, app, press("n"))
+	send(t, app, press("j"))
+	drain(send(t, app, press("y")))
+	assert.Equal(t, []string{gone.URL}, clipboardOf(t, app).copied(), "the link GitHub gave, on GitHub's own host")
+}
+
+func TestANotificationsTextIsFoldedOntoOneLine(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	key := app.cur().prs[0].Key()
+	app.recordTrayNotification(key, "Title\nwith a newline\x1b[31m", "handoff failed", "exit status 1\nstderr: boom\r\n", trayKindHandoff)
+
+	item := app.tray.items[0]
+	assert.Equal(t, "Title with a newline[31m", item.title)
+	assert.Equal(t, "exit status 1 stderr: boom", item.detail)
+
+	for _, line := range app.renderTrayRow(item, 60, false) {
+		assert.NotContains(t, line, "\n")
+		assert.LessOrEqual(t, ansi.StringWidth(line), 60)
+	}
+}
+
+func TestPinningTheSidebarThatCannotBeSavedChangesNothing(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	require.NoError(t, os.WriteFile(app.store.Path(home.ConfigFile), []byte("herdr: [\n"), 0o600))
+	send(t, app, press("n"))
+
+	msgs := drain(send(t, app, press("p")))
+
+	assert.False(t, app.homeCfg.Notifications.Sidebar, "prutil does not act on a setting the file does not hold")
+	assert.True(t, app.tray.popupOpen)
+	require.Len(t, statuses(msgs), 1)
+	assert.Contains(t, string(statuses(msgs)[0]), "could not save notification sidebar")
+}
+
+func TestPinningTheSidebarIsSavedToTheConfiguration(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	send(t, app, press("n"))
+	send(t, app, press("p"))
+
+	cfg, err := app.store.LoadConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.Notifications.Sidebar)
+}
+
+func TestJumpingToANotificationsPullRequestStartsTheDetailPaneAfresh(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	send(t, app, press("l"))
+	send(t, app, press("k"))
+	send(t, app, press("l"))
+	require.Equal(t, detailWatchPage, app.page)
+
+	other := app.cur().prs[2].Key()
+	app.recordTrayNotification(other, "Bump dependencies", "approved", "", trayKindApproved)
+	send(t, app, press("n"))
+	send(t, app, press("enter"))
+
+	assert.Equal(t, other, app.selectedKey())
+	assert.Equal(t, detailOverview, app.page, "the watch log belonged to the pull request left behind")
+	assert.Equal(t, detailChecks, app.section)
+	assert.Zero(t, app.watchOffset)
+}
+
+func TestTheSidebarAndPopupFitEveryTerminalSize(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{40, 12}, {79, 24}, {91, 24}, {minSidebarWidth, 24}, {100, 30}, {120, 8}, {200, 60},
+	}
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			app, _, _ := newTestApp(t, size.width, size.height)
+			app.homeCfg.Notifications.Sidebar = true
+			for _, pr := range app.cur().prs {
+				app.recordTrayNotification(pr.Key(), pr.Title, "handoff failed", strings.Repeat("a long detail ", 10), trayKindHandoff)
+			}
+
+			check := func(what string) {
+				rendered := lines(app)
+				assert.LessOrEqual(t, len(rendered), size.height, "%s overflows vertically", what)
+				for i, line := range rendered {
+					assert.LessOrEqual(t, ansi.StringWidth(line), size.width, "%s: line %d overflows: %q", what, i, line)
+				}
+			}
+			for _, focus := range []pane{paneList, paneDetail, paneNotifications} {
+				if focus == paneNotifications && !app.sidebarVisible() {
+					continue
+				}
+				app.focus = focus
+				check(fmt.Sprintf("sidebar with focus %d", focus))
+			}
+
+			app.focus = paneList
+			app.homeCfg.Notifications.Sidebar = false
+			send(t, app, press("n"))
+			require.True(t, app.tray.popupOpen)
+			check("popup")
+		})
+	}
 }

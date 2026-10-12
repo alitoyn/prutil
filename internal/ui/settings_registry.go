@@ -360,7 +360,7 @@ func allSettings() []settingDescriptor {
 		id:      "notifications.sidebar",
 		section: "DESKTOP NOTIFICATIONS",
 		title:   "Notification sidebar",
-		detail:  "Keep notification history open in a dedicated pane on the right-hand side of the screen when terminal width allows (at least 92 columns).",
+		detail:  fmt.Sprintf("Keep notification history open in a dedicated pane on the right-hand side of the screen when terminal width allows (at least %d columns).", minSidebarWidth),
 		def:     onOff(defCfg.Notifications.Sidebar),
 		path:    []string{"notifications", "sidebar"},
 		label:   "notification sidebar",

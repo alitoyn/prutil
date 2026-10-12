@@ -2,13 +2,16 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/relloyd/prutil/internal/home"
 	"github.com/relloyd/prutil/internal/model"
 )
 
@@ -36,13 +39,19 @@ const maxTrayItems = 100
 // trayRowHeight is the height in lines of each notification entry in the list.
 const trayRowHeight = 3
 
+// trayPaneHeader is the lines the sidebar draws above its first entry: the
+// heading and the rule beneath it.
+const trayPaneHeader = 2
+
 // trayItem represents one recorded notification event during the session.
 type trayItem struct {
-	id       int
-	at       time.Time
-	key      model.Key
-	repo     string
-	number   int
+	id  int
+	at  time.Time
+	key model.Key
+	// url is the pull request's link as it was when the notification was
+	// recorded, for when the pull request has since left every view. It comes
+	// from GitHub, so it names the right host on an enterprise install.
+	url      string
 	title    string
 	headline string
 	detail   string
@@ -52,6 +61,7 @@ type trayItem struct {
 
 // trayState holds the notification tray session history and navigation.
 type trayState struct {
+	keys      trayKeyMap
 	nextID    int
 	items     []trayItem
 	cursor    int
@@ -86,7 +96,12 @@ func (t *trayState) record(item trayItem) {
 
 // recordTrayNotification records an event into the session's notification history,
 // stripping any redundant PR key prefix from headline.
+//
+// Every text is folded onto one line as it is recorded. A title is the pull
+// request author's text and a detail can be an error from another program, and
+// a newline in either would make a card taller than trayRowHeight.
 func (a *App) recordTrayNotification(key model.Key, title, headline, detail string, kind trayKind) {
+	title, headline, detail = model.SafeLine(title), model.SafeLine(headline), model.SafeLine(detail)
 	if key.Repo != "" || key.Number > 0 {
 		prefix := key.String()
 		if strings.HasPrefix(headline, prefix+": ") {
@@ -96,11 +111,11 @@ func (a *App) recordTrayNotification(key model.Key, title, headline, detail stri
 		}
 	}
 
+	pr, _ := a.findPR(key)
 	a.tray.record(trayItem{
 		at:       a.now(),
 		key:      key,
-		repo:     key.Repo,
-		number:   key.Number,
+		url:      pr.URL,
 		title:    title,
 		headline: headline,
 		detail:   detail,
@@ -138,12 +153,13 @@ func (a *App) toggleNotifications() {
 	}
 }
 
-// toggleSidebarMode switches between the floating popup modal and a permanent sidebar pane.
-func (a *App) toggleSidebarMode() {
+// toggleSidebarMode switches between the floating popup modal and a permanent
+// sidebar pane. A save that fails changes nothing, and says why.
+func (a *App) toggleSidebarMode() tea.Cmd {
 	next := !a.homeCfg.Notifications.Sidebar
-	a.homeCfg.Notifications.Sidebar = next
-	if a.store != nil {
-		_ = a.store.SetNotificationSidebar(next)
+	path := []string{"notifications", "sidebar"}
+	if err := a.saveSetting(path, strconv.FormatBool(next), func(c *home.Config) { c.Notifications.Sidebar = next }); err != nil {
+		return status("could not save notification sidebar: " + err.Error())
 	}
 	if next {
 		a.tray.popupOpen = false
@@ -156,6 +172,7 @@ func (a *App) toggleSidebarMode() {
 		}
 	}
 	a.clampScroll()
+	return nil
 }
 
 // openNotificationPR closes the notification popup and navigates to the selected notification's pull request.
@@ -168,49 +185,53 @@ func (a *App) openNotificationPR() tea.Cmd {
 	return a.jumpToPR(item.key)
 }
 
-// jumpToPR moves the list cursor to the pull request matching key, switching views if necessary.
+// jumpToPR moves the list cursor to the pull request matching key, switching
+// views if necessary. The detail pane starts afresh, as it does whenever the
+// list moves to another pull request.
 func (a *App) jumpToPR(key model.Key) tea.Cmd {
-	// First check current view.
-	curView := a.cur()
-	for i, pr := range curView.prs {
-		if pr.Key() == key {
-			curView.cursor = i
-			a.clampScroll()
-			a.focus = paneList
-			return a.withSpinner(a.ensureChecks(key))
-		}
+	v, index, ok := a.locatePR(key)
+	if !ok {
+		a.status = fmt.Sprintf("PR %s not in current view", key.String())
+		return nil
 	}
-
-	// Check other views.
-	for v := view(0); v < viewCount; v++ {
-		if v == a.active {
-			continue
-		}
-		for i, pr := range a.views[v].prs {
-			if pr.Key() == key {
-				cmd := a.switchView(v)
-				a.cur().cursor = i
-				a.clampScroll()
-				a.focus = paneList
-				return tea.Batch(cmd, a.withSpinner(a.ensureChecks(key)))
-			}
-		}
-	}
-
-	a.status = fmt.Sprintf("PR %s not in current view", key.String())
-	return nil
+	cmd := a.switchView(v)
+	a.cur().cursor = index
+	a.focus = paneList
+	a.resetDetailNavigation()
+	a.clampScroll()
+	return tea.Batch(cmd, a.withSpinner(a.ensureChecks(key)))
 }
 
-// findPR searches all views for the pull request matching key.
-func (a *App) findPR(key model.Key) (model.PullRequest, bool) {
-	for v := view(0); v < viewCount; v++ {
-		for _, pr := range a.views[v].prs {
+// locatePR finds the pull request matching key, looking in the view on screen
+// first so that one listed in both stays where the reader is.
+func (a *App) locatePR(key model.Key) (view, int, bool) {
+	for _, v := range append([]view{a.active}, allViews()...) {
+		for i, pr := range a.views[v].prs {
 			if pr.Key() == key {
-				return pr, true
+				return v, i, true
 			}
 		}
 	}
-	return model.PullRequest{}, false
+	return 0, 0, false
+}
+
+// findPR searches all views for the pull request matching key. prByKey is
+// the open view alone, which is what the watcher wants and this does not.
+func (a *App) findPR(key model.Key) (model.PullRequest, bool) {
+	v, index, ok := a.locatePR(key)
+	if !ok {
+		return model.PullRequest{}, false
+	}
+	return a.views[v].prs[index], true
+}
+
+// allViews lists every view in tab order.
+func allViews() []view {
+	out := make([]view, 0, viewCount)
+	for v := view(0); v < viewCount; v++ {
+		out = append(out, v)
+	}
+	return out
 }
 
 // clampTrayScroll keeps the tray cursor and scroll offset within visible boundaries.
@@ -226,7 +247,7 @@ func (a *App) clampTrayScroll() {
 	if a.tray.popupOpen {
 		window = max((a.trayPopupLayout().body)/trayRowHeight, 1)
 	} else if a.sidebarVisible() {
-		window = max((a.bodyHeight()-2)/trayRowHeight, 1)
+		window = a.traySidebarRows()
 	}
 	a.tray.offset = clampOffset(a.tray.offset, a.tray.cursor, window, count)
 }
@@ -234,36 +255,41 @@ func (a *App) clampTrayScroll() {
 // updateTrayPopup handles keypresses, mouse scrolling, and clicks while the
 // notification history popup is visible.
 func (a *App) updateTrayPopup(msg tea.Msg) (tea.Cmd, bool) {
+	keys := a.tray.keys
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "q", "n":
+		switch {
+		case key.Matches(msg, keys.Quit):
+			return tea.Quit, true
+		case key.Matches(msg, keys.Close):
 			a.tray.popupOpen = false
 			return nil, true
-		case "enter":
+		case key.Matches(msg, keys.Open):
 			return a.openNotificationPR(), true
-		case "p":
-			a.toggleSidebarMode()
-			return nil, true
-		case "up", "k":
+		case key.Matches(msg, keys.Pin):
+			return a.toggleSidebarMode(), true
+		case key.Matches(msg, keys.Up):
 			a.tray.cursor = max(a.tray.cursor-1, 0)
 			a.clampTrayScroll()
 			return nil, true
-		case "down", "j":
+		case key.Matches(msg, keys.Down):
 			a.tray.cursor = min(a.tray.cursor+1, max(len(a.tray.items)-1, 0))
 			a.clampTrayScroll()
 			return nil, true
-		case "g", "home":
+		case key.Matches(msg, keys.Top):
 			a.tray.cursor = 0
 			a.clampTrayScroll()
 			return nil, true
-		case "G", "end":
+		case key.Matches(msg, keys.Bottom):
 			a.tray.cursor = max(len(a.tray.items)-1, 0)
 			a.clampTrayScroll()
 			return nil, true
-		case "y":
+		case key.Matches(msg, keys.Copy):
+			// Copied before closing: selectedTarget answers for the popup
+			// only while it is open.
+			cmd := a.copyURL()
 			a.tray.popupOpen = false
-			return a.copyURL(), true
+			return cmd, true
 		default:
 			return nil, true
 		}
@@ -352,7 +378,10 @@ func (a *App) trayBox(l trayPopupLayout) []string {
 		}
 		box = append(box, row(line))
 	}
-	hints := a.styles.Muted.Render("enter: jump · p: pin sidebar · esc: close")
+	keys := a.tray.keys
+	hints := a.styles.Muted.Render(strings.Join([]string{
+		hintFor(keys.Open), hintFor(keys.Pin), hintFor(keys.Close),
+	}, " · "))
 	box = append(box, a.edge(l.width, "╰", "╯", hints, ""))
 	if len(box) > l.height {
 		box = append(box[:max(l.height-1, 0)], box[len(box)-1])
@@ -423,13 +452,15 @@ func (a *App) trayItemGlyph(kind trayKind) seg {
 	}
 }
 
-// trayItemAge formats the elapsed duration since the notification event occurred.
+// hintFor is how the popup's bottom edge names one of its keys.
+func hintFor(b key.Binding) string {
+	return b.Help().Key + ": " + b.Help().Desc
+}
+
+// trayItemAge formats the elapsed duration since the notification event
+// occurred. It counts in minutes, which is all minutesShown wakes for.
 func (a *App) trayItemAge(item trayItem) string {
-	d := a.now().Sub(item.at)
-	if d < time.Minute {
-		return "now"
-	}
-	return model.HumanDuration(d)
+	return model.HumanAge(a.now().Sub(item.at))
 }
 
 // trayKindStyle returns the accent color style for a notification category.
@@ -465,16 +496,12 @@ func (a *App) renderTrayRow(item trayItem, width int, selected bool) []string {
 
 	// Line 1: Identity & age (#12 relloyd/prutil  now)
 	var idSegs []seg
-	if item.number > 0 {
-		idSegs = append(idSegs, seg{text: "#" + fmt.Sprint(item.number), style: a.styles.Number})
+	if item.key.Number > 0 {
+		idSegs = append(idSegs, seg{text: "#" + fmt.Sprint(item.key.Number), style: a.styles.Number})
 	}
-	repo := item.repo
-	if repo == "" && item.key.Repo != "" {
-		repo = item.key.Repo
-	}
-	if repo != "" {
-		idSegs = append(idSegs, seg{text: repo, style: titleStyle})
-	} else if item.number == 0 {
+	if item.key.Repo != "" {
+		idSegs = append(idSegs, seg{text: item.key.Repo, style: titleStyle})
+	} else if item.key.Number == 0 {
 		if item.title != "" {
 			idSegs = append(idSegs, seg{text: item.title, style: titleStyle})
 		} else {
@@ -525,4 +552,11 @@ func (a *App) renderTrayRow(item trayItem, width int, selected bool) []string {
 		padTo(line2, width),
 		padTo(line3, width),
 	}
+}
+
+// traySidebarRows is how many notification cards the sidebar has room for.
+// The click mapping and the scrolling both ask it, so a click can only land
+// on a card that is drawn.
+func (a *App) traySidebarRows() int {
+	return max((a.bodyHeight()-trayPaneHeader)/trayRowHeight, 1)
 }

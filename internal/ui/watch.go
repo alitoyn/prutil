@@ -634,11 +634,7 @@ func (a *App) stopForOtherAgent(key model.Key, hold model.Hold) tea.Cmd {
 	a.clearWatch(key, "stopped watching: "+why)
 
 	pr, _ := a.prByKey(key)
-	title := ""
-	if pr.Title != "" {
-		title = pr.Title
-	}
-	a.recordTrayNotification(key, title, "stopped watching", why, trayKindWatch)
+	a.recordTrayNotification(key, pr.Title, "stopped watching", why, trayKindWatch)
 	if a.store != nil {
 		_ = a.store.AppendHandoff(home.Handoff{
 			At:      a.now(),
