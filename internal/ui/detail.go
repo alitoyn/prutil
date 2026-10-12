@@ -85,6 +85,29 @@ func (a *App) sectionHeading(text string, selected bool) string {
 	return prefix + style.Render(text)
 }
 
+// drillHint is what follows a section heading with a page of its own behind
+// it: the chevron always, so the page can be seen to be there at a glance, and
+// where → goes once the heading is selected. CHECKS has no page, and no
+// chevron, which is part of what makes WATCH's mean something.
+const (
+	drillHint         = " ›"
+	drillHintSelected = " › watch log"
+)
+
+// drillHeading is sectionHeading for a section that → drills into. The hint
+// gives way to the heading in a pane too narrow for both, the longer one first.
+func (a *App) drillHeading(text string, selected bool, width int) string {
+	used := sectionIndent + lenOf(text)
+	hint := drillHint
+	if selected && used+lenOf(drillHintSelected) <= width {
+		hint = drillHintSelected
+	}
+	if used+lenOf(hint) > width {
+		hint = ""
+	}
+	return a.sectionHeading(text, selected) + a.styles.Muted.Render(hint)
+}
+
 // detailHeader renders everything above the check list.
 func (a *App) detailHeader(pr model.PullRequest, width int) []string {
 	lines := []string{

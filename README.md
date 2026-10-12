@@ -577,7 +577,9 @@ watch or handoff activity. It shows the current state-machine tier, cadence and
 next check; work currently in flight; a bounded activity feed from this TUI
 session; and the three most recent durable handoff attempts for that pull
 request. The activity feed resets when prutil exits; `handoffs.jsonl` is the
-cross-session record.
+cross-session record. The `›` after the heading marks the fuller page behind
+it: select WATCH and press `l`, `→` or `enter` to open it. While WATCH is
+selected, the heading and the footer both say `watch log`.
 
 ### What the watching costs
 

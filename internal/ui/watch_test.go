@@ -1241,6 +1241,65 @@ func TestEveryWatchLineLinesUpWithItsHeading(t *testing.T) {
 	}
 }
 
+func TestTheWatchHeadingShowsThereIsAPageBehindIt(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	pr, ok := app.selectedPR()
+	require.True(t, ok)
+	_, width := app.paneWidths()
+
+	assert.Equal(t, "  WATCH ›", plain(app.watchDetail(pr, width, 20, false)[0]),
+		"the chevron is there before the heading is selected")
+	assert.Equal(t, "▌ WATCH › watch log", plain(app.watchDetail(pr, width, 20, true)[0]),
+		"and says where → goes once it is")
+
+	column := detailColumn(plain(app.render()))
+	idx := slices.IndexFunc(column, func(l string) bool { return strings.Contains(l, "CHECKS") })
+	require.GreaterOrEqual(t, idx, 0)
+	assert.NotContains(t, column[idx], "›", "CHECKS has no page behind it")
+}
+
+func TestTheWatchHeadingDropsItsHintBeforeItsName(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	for _, tc := range []struct {
+		name     string
+		width    int
+		selected bool
+		want     string
+	}{
+		{name: "A pane with room for the whole hint shows it.", width: 30, selected: true, want: "▌ WATCH › watch log"},
+		{name: "A pane too narrow for where it goes keeps the chevron.", width: 12, selected: true, want: "▌ WATCH ›"},
+		{name: "A pane too narrow for the chevron keeps the heading.", width: 8, selected: false, want: "  WATCH"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := app.drillHeading("WATCH", tc.selected, tc.width)
+			assert.Equal(t, tc.want, plain(line))
+			assert.LessOrEqual(t, ansi.StringWidth(line), tc.width)
+		})
+	}
+}
+
+func TestTheFooterSaysWhereRightGoesOnTheWatchHeading(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	send(t, app, press("w"))
+	send(t, app, press("l"))
+	footer := plain(strings.Join(app.footerLines(), "\n"))
+	assert.Contains(t, footer, "→/l detail", "on a check, → is the ordinary binding")
+
+	send(t, app, press("k"))
+	require.Equal(t, detailWatch, app.section)
+	footer = plain(strings.Join(app.footerLines(), "\n"))
+	assert.Contains(t, footer, "→/l watch log")
+	assert.Contains(t, footer, "q quit", "the longer label still fits at 120 columns")
+	assert.NotContains(t, footer, "…")
+	assert.Equal(t, "detail", app.keys.Into.Help().Desc, "the key map itself is left alone")
+
+	send(t, app, press("l"))
+	require.Equal(t, detailWatchPage, app.page)
+	footer = plain(strings.Join(app.footerLines(), "\n"))
+	assert.Contains(t, footer, "→/l detail", "inside the log there is nowhere further to go")
+}
+
 func TestOnePullRequestsWatcherStateLivesInOneEntry(t *testing.T) {
 	// Seven maps written from six places and cleaned up from four is how a
 	// cleanup comes to reach five of them. One entry is cleared in one place.

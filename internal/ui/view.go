@@ -202,8 +202,15 @@ func (a *App) footerLines() []string {
 		notice = a.styles.Error.Render("config: " + ansi.Truncate(a.homeNote, max(a.width-8, 10), ellipsis))
 	}
 
+	// → means something different on the WATCH heading, so the footer says
+	// what it does there. A copy, because View must not change the key map.
+	keys := a.keys
+	if a.onWatchHeading() {
+		keys.Into.SetHelp(keys.Into.Help().Key, "watch log")
+	}
+
 	lines := []string{notice}
-	for _, line := range strings.Split(a.help.View(a.keys), "\n") {
+	for _, line := range strings.Split(a.help.View(keys), "\n") {
 		// The help component drops bindings that do not fit, but it gives up at
 		// some widths, so the line is clipped here as well.
 		lines = append(lines, ansi.Truncate(line, a.width, ellipsis))

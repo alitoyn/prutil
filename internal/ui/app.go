@@ -1646,19 +1646,25 @@ func (a *App) normalizeDetailSelection() {
 // and a check is the one with somewhere of its own to open, so each key
 // answers whichever the reader is sitting on.
 func (a *App) intoWatchLog() bool {
-	if a.focus != paneDetail || a.page != detailOverview || a.section != detailWatch {
-		return false
-	}
-	// Gated on the section still being there. clampScroll normalises a stale
-	// selection, but these keys can arrive before it has run.
-	pr, ok := a.selectedPR()
-	if !ok || !a.hasWatchSection(pr) {
+	if !a.onWatchHeading() {
 		return false
 	}
 	a.page = detailWatchPage
 	a.watchOffset = 0
 	a.clampScroll()
 	return true
+}
+
+// onWatchHeading reports whether → and enter would drill into the watch log
+// now, which is also what decides whether the footer says so.
+func (a *App) onWatchHeading() bool {
+	if a.focus != paneDetail || a.page != detailOverview || a.section != detailWatch {
+		return false
+	}
+	// Gated on the section still being there. clampScroll normalises a stale
+	// selection, but these keys can arrive before it has run.
+	pr, ok := a.selectedPR()
+	return ok && a.hasWatchSection(pr)
 }
 
 // resetDetailNavigation returns the detail pane to its normal CHECKS view.
