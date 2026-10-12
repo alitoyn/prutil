@@ -25,16 +25,26 @@ type prFacts struct {
 	// passed is every check on head having passed. head is kept with it so
 	// that a push whose checks pass between two readings, and so is never
 	// seen pending, is still news.
-	passed bool
-	head   string
+	passed         bool
+	head           string
+	approvalsKnown bool
+	checksKnown    bool
 }
 
 func factsOfPR(pr model.PullRequest) prFacts {
-	return prFacts{approved: pr.Approved(), passed: pr.Rollup == model.StatusSuccess, head: pr.HeadOID}
+	return prFacts{
+		approved: pr.Approved(), approvalsKnown: true,
+		passed: pr.Rollup == model.StatusSuccess, head: pr.HeadOID,
+		checksKnown: pr.Rollup != model.StatusFailure && pr.Rollup != model.StatusUnknown,
+	}
 }
 
 func factsOfSnapshot(s model.Snapshot) prFacts {
-	return prFacts{approved: s.Approved(), passed: s.Rollup == model.StatusSuccess, head: s.HeadOID}
+	return prFacts{
+		approved: s.Approved(), approvalsKnown: true,
+		passed: s.Rollup == model.StatusSuccess, head: s.HeadOID,
+		checksKnown: s.Rollup != model.StatusFailure && s.Rollup != model.StatusUnknown,
+	}
 }
 
 // notification is one kind of change the reader can be told about: how the
@@ -119,17 +129,28 @@ func readingsOfSnapshots(snaps []model.Snapshot, at time.Time) []reading {
 func (a *App) notice(readings []reading) tea.Cmd {
 	var changes []change
 	for _, r := range readings {
-		entry := a.mutate(r.key)
-		if entry.hasFacts && r.at.Before(entry.factsAt) {
-			continue
+		if state, ok := a.checks[r.key]; ok && state.loaded &&
+			(state.headOID == "" || state.headOID == r.facts.head) {
+			r.facts.checksKnown = state.err == nil && len(state.checks) > 0
+			r.facts.passed = r.facts.checksKnown &&
+				model.CountChecks(state.checks).Rollup() == model.StatusSuccess
 		}
-		before, seen := entry.facts, entry.hasFacts
-		entry.facts, entry.factsAt, entry.hasFacts = r.facts, r.at, true
-		if !seen {
-			continue
+		entry := a.mutate(r.key)
+		before := entry.facts
+		approvalChanged, checkChanged := false, false
+		if r.facts.approvalsKnown && (!entry.hasFacts || !r.at.Before(entry.factsAt)) {
+			approvalChanged = entry.hasFacts
+			entry.facts.approved, entry.factsAt, entry.hasFacts = r.facts.approved, r.at, true
+		}
+		if r.facts.checksKnown && (!entry.hasCheckFacts || !r.at.Before(entry.checkFactsAt)) {
+			checkChanged = entry.hasCheckFacts
+			entry.facts.passed, entry.facts.head = r.facts.passed, r.facts.head
+			entry.checkFactsAt, entry.hasCheckFacts = r.at, true
 		}
 		for _, kind := range notifications {
-			if kind.fired(before, r.facts) && a.homeCfg.Notifications.Enabled(kind.event) {
+			eligible := kind.event == home.NotifyApproved && approvalChanged ||
+				kind.event == home.NotifyChecksPassed && checkChanged
+			if eligible && kind.fired(before, entry.facts) && a.homeCfg.Notifications.Enabled(kind.event) {
 				changes = append(changes, change{key: r.key, kind: kind})
 			}
 		}
@@ -251,7 +272,10 @@ func (a *App) applyNotifyPoll(msg notifyPollMsg) tea.Cmd {
 	a.notifyErr = msg.err
 	var announce tea.Cmd
 	if msg.err == nil {
-		announce = a.notice(readingsOfSnapshots(msg.snaps, msg.at))
+		announce = tea.Batch(
+			a.notice(readingsOfSnapshots(msg.snaps, msg.at)),
+			a.resolveFailedSnapshots(msg.snaps),
+		)
 	}
 	return tea.Batch(announce, a.scheduleListRead())
 }

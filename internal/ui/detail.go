@@ -34,7 +34,7 @@ func (a *App) renderDetail(width, height int) []string {
 	state := a.checks[pr.Key()]
 
 	switch {
-	case state.err != nil:
+	case state.err != nil && len(state.checks) == 0:
 		lines = append(lines, a.styles.Error.Render("checks unavailable"))
 		lines = append(lines, wrapLines(state.err.Error(), width, 3)...)
 		return lines
@@ -46,6 +46,10 @@ func (a *App) renderDetail(width, height int) []string {
 		return lines
 	}
 
+	if state.err != nil {
+		lines = append(lines, a.styles.Error.Render("partial checks · automatic check actions paused"))
+		lines = append(lines, wrapLines(state.err.Error(), width, 2)...)
+	}
 	lines = append(lines, a.sectionHeading(fmt.Sprintf("CHECKS (%d)", len(state.checks)),
 		a.section == detailChecks))
 

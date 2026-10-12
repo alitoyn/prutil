@@ -113,6 +113,7 @@ type viewState struct {
 	// unavailable counts repositories the closed view could not reach, so the
 	// header can admit the list is incomplete instead of implying it is whole.
 	unavailable int
+	readAt      time.Time
 	// enriching reports that the closed view is showing a first-page partial
 	// result while FinishClosedPullRequests fills in the rest in the
 	// background. Distinct from loading: the rows on screen are already
@@ -124,9 +125,11 @@ type viewState struct {
 // checkState is the cache entry for one pull request's checks.
 type checkState struct {
 	checks  []model.Check
+	headOID string
 	err     error
 	loading bool
 	loaded  bool
+	askedAt time.Time
 }
 
 // handoffHistoryLimit keeps the durable detail history concise.
@@ -370,12 +373,15 @@ type prRuntime struct {
 	// history is the tail of the durable handoff log, read outside rendering.
 	history handoffHistoryState
 	headOID string
+	headAt  time.Time
 	rollup  model.Status
 	// facts is the last reading a desktop notification would be raised on,
 	// factsAt when it was asked for, and hasFacts whether there has been one.
-	facts    prFacts
-	factsAt  time.Time
-	hasFacts bool
+	facts         prFacts
+	factsAt       time.Time
+	hasFacts      bool
+	checkFactsAt  time.Time
+	hasCheckFacts bool
 }
 
 // confirmable names an action a reader has to press twice, because it does
@@ -391,6 +397,9 @@ const (
 	// prutil is holding back. Separate from confirmHeldHandoff because the two
 	// keys do different things and each has to say which it is asking about.
 	confirmHeldChecks confirmable = "held check investigation"
+	// confirmPartialChecks sends only the failed checks visible in an
+	// incomplete detail read; it does not waive a security hold.
+	confirmPartialChecks confirmable = "incomplete check investigation"
 	// confirmRelease releases an adopted pull request, which also withdraws
 	// the trust adopting it granted.
 	confirmRelease confirmable = "release"
@@ -405,9 +414,12 @@ const (
 // pendingConfirm is a question prutil has asked on the status line and is
 // waiting for an answer to.
 type pendingConfirm struct {
-	key    model.Key
-	action confirmable
-	at     time.Time
+	key        model.Key
+	action     confirmable
+	at         time.Time
+	heldPassed bool
+	checkHead  string
+	checks     []model.Check
 }
 
 // confirms reports whether this press answers the question already on screen.
@@ -640,7 +652,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.viewer != "" && a.viewer == "" {
 			a.viewer = msg.viewer
 		}
-		a.applyPRs(msg.view, msg.prs, msg.unavailable)
+		a.applyPRs(msg.view, msg.prs, msg.unavailable, msg.at)
 		adopted := a.applyAdoptedLoad(msg)
 		// Auto-watch arms after watchAfterLoad has synced the engine, and
 		// syncs it again for what it armed.
@@ -688,23 +700,73 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != a.gen {
 			return a, nil
 		}
-		a.checks[msg.key] = checkState{checks: msg.checks, loaded: true}
-		a.clampScroll()
-		if msg.checkHandoff {
-			return a, a.applyFailedChecks(msg.key, msg.headOID, msg.checks, msg.force, msg.allowProvision)
+		if !a.checkHeadMatches(msg.key, msg.headOID) {
+			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+				a.setWatchOperation(msg.key, "")
+			}
+			return a, nil
 		}
-		return a, nil
+		if state := a.checks[msg.key]; !msg.at.IsZero() && !state.askedAt.IsZero() &&
+			msg.at.Before(state.askedAt) {
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+				a.setWatchOperation(msg.key, "")
+			}
+			return a, nil
+		}
+		if watched := a.runtimeOf(msg.key); !msg.at.IsZero() && msg.headOID != "" &&
+			watched.headOID == msg.headOID && msg.at.Before(watched.headAt) {
+			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+			}
+			return a, nil
+		}
+		a.checks[msg.key] = checkState{checks: msg.checks, headOID: msg.headOID, loaded: true, askedAt: msg.at}
+		a.clampScroll()
+		after := a.applyEffectiveChecks(msg.key, msg.headOID, msg.checks, msg.at)
+		if msg.checkHandoff {
+			return a, tea.Batch(after, a.applyFailedChecks(msg.key, msg.headOID, msg.checks, msg.force, msg.allowProvision))
+		}
+		return a, after
 
 	case checksErrMsg:
 		if msg.gen != a.gen {
 			return a, nil
 		}
-		a.checks[msg.key] = checkState{err: msg.err, loaded: true}
+		if !a.checkHeadMatches(msg.key, msg.headOID) {
+			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+				a.setWatchOperation(msg.key, "")
+			}
+			return a, nil
+		}
+		if state := a.checks[msg.key]; !msg.at.IsZero() && !state.askedAt.IsZero() &&
+			msg.at.Before(state.askedAt) {
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+				a.setWatchOperation(msg.key, "")
+			}
+			return a, nil
+		}
+		if watched := a.runtimeOf(msg.key); !msg.at.IsZero() && msg.headOID != "" &&
+			watched.headOID == msg.headOID && msg.at.Before(watched.headAt) {
+			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
+			if msg.checkHandoff {
+				a.mutate(msg.key).handing = false
+			}
+			return a, nil
+		}
+		a.checks[msg.key] = checkState{checks: msg.checks, headOID: msg.headOID, err: msg.err, loaded: true, askedAt: msg.at}
+		a.clampScroll()
 		if msg.checkHandoff {
 			a.mutate(msg.key).handing = false
 			a.setWatchOperation(msg.key, "")
 		}
-		return a, nil
+		return a, status("could not read all checks on " + msg.key.String() + ": " + msg.err.Error())
 
 	case selectionMsg:
 		if msg.gen != a.gen || a.selectedKey() != msg.key {
@@ -1258,9 +1320,19 @@ func (a *App) cur() *viewState {
 
 // applyPRs installs a freshly loaded list into one view, keeping the cursor on
 // the same pull request when it is still in the list.
-func (a *App) applyPRs(v view, prs []model.PullRequest, unavailable int) {
+func (a *App) applyPRs(v view, prs []model.PullRequest, unavailable int, at time.Time) {
 	state := &a.views[v]
 	previous, hadSelection := prAt(state.prs, state.cursor)
+	for _, pr := range prs {
+		for _, old := range state.prs {
+			if old.Key() == pr.Key() && old.HeadOID != pr.HeadOID {
+				if cached, ok := a.checks[pr.Key()]; ok && cached.headOID != pr.HeadOID {
+					delete(a.checks, pr.Key())
+				}
+				break
+			}
+		}
+	}
 
 	state.prs = prs
 	state.loading = false
@@ -1268,6 +1340,7 @@ func (a *App) applyPRs(v view, prs []model.PullRequest, unavailable int) {
 	state.err = nil
 	state.unavailable = unavailable
 	state.lastRefresh = a.now()
+	state.readAt = at
 
 	state.cursor = 0
 	if hadSelection {
@@ -1345,8 +1418,26 @@ func (a *App) ensureChecks(prKey model.Key) tea.Cmd {
 	if state, ok := a.checks[prKey]; ok && (state.loaded || state.loading) {
 		return nil
 	}
-	a.checks[prKey] = checkState{loading: true}
+	a.checks[prKey] = checkState{loading: true, askedAt: a.now()}
 	return a.loadChecks(a.gen, prKey)
+}
+
+// checkHeadMatches prevents a slow detail read from replacing a newer head's
+// checks. A watch snapshot can be newer than the list, so prefer its head.
+func (a *App) checkHeadMatches(key model.Key, head string) bool {
+	if head == "" {
+		return true
+	}
+	watched := a.runtimeOf(key)
+	pr, ok := a.prByKey(key)
+	if watched.headOID != "" && (!ok || pr.HeadOID == "" ||
+		watched.headAt.After(a.views[viewOpen].readAt)) {
+		return watched.headOID == head
+	}
+	if ok && pr.HeadOID != "" {
+		return pr.HeadOID == head
+	}
+	return true
 }
 
 // load returns the command that fills one view and marks it in flight.
@@ -1422,7 +1513,11 @@ func (a *App) noticeAfterLoad(msg prsMsg) tea.Cmd {
 	if msg.view != viewOpen {
 		return nil
 	}
-	return tea.Batch(a.notice(readingsOfPRs(msg.prs, msg.at)), a.scheduleListRead())
+	return tea.Batch(
+		a.notice(readingsOfPRs(a.views[viewOpen].prs, msg.at)),
+		a.resolveFailedPRs(a.views[viewOpen].prs),
+		a.scheduleListRead(),
+	)
 }
 
 // loadClosed fetches the first page of the recently closed sweep and returns
@@ -1469,28 +1564,32 @@ func (a *App) loadClosedFinish(gen int, state gh.ClosedSweepState) tea.Cmd {
 
 // loadChecks fetches the checks for one pull request.
 func (a *App) loadChecks(gen int, prKey model.Key) tea.Cmd {
-	client := a.client
+	client, at := a.client, a.now()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		checks, err := client.Checks(ctx, prKey)
+		result, err := client.Checks(ctx, prKey)
 		if err != nil {
-			return checksErrMsg{gen: gen, key: prKey, err: err}
+			return checksErrMsg{gen: gen, key: prKey, headOID: result.HeadOID, checks: result.Checks, at: at, err: err}
 		}
-		return checksMsg{gen: gen, key: prKey, checks: checks}
+		return checksMsg{gen: gen, key: prKey, headOID: result.HeadOID, checks: result.Checks, at: at}
 	}
 }
 
 func (a *App) loadChecksForHandoff(gen int, prKey model.Key, headOID string, force, allowProvision bool) tea.Cmd {
-	client := a.client
+	client, at := a.client, a.now()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		checks, err := client.Checks(ctx, prKey)
-		if err != nil {
-			return checksErrMsg{gen: gen, key: prKey, err: err, checkHandoff: true}
+		result, err := client.Checks(ctx, prKey)
+		if err == nil && headOID != "" && result.HeadOID != "" && headOID != result.HeadOID {
+			err = fmt.Errorf("head changed from %s to %s while reading checks", headOID, result.HeadOID)
+			result.Checks = nil
 		}
-		return checksMsg{gen: gen, key: prKey, checks: checks, checkHandoff: true, headOID: headOID, force: force, allowProvision: allowProvision}
+		if err != nil {
+			return checksErrMsg{gen: gen, key: prKey, headOID: result.HeadOID, checks: result.Checks, at: at, err: err, checkHandoff: true}
+		}
+		return checksMsg{gen: gen, key: prKey, checks: result.Checks, checkHandoff: true, headOID: result.HeadOID, at: at, force: force, allowProvision: allowProvision}
 	}
 }
 
@@ -1809,6 +1908,7 @@ type (
 		checks         []model.Check
 		checkHandoff   bool
 		headOID        string
+		at             time.Time
 		force          bool
 		allowProvision bool
 	}
@@ -1817,6 +1917,9 @@ type (
 		key          model.Key
 		err          error
 		checkHandoff bool
+		checks       []model.Check
+		headOID      string
+		at           time.Time
 	}
 	selectionMsg struct {
 		gen int

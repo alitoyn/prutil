@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/relloyd/prutil/internal/model"
 )
 
@@ -121,8 +123,11 @@ func (a *App) ageText(pr model.PullRequest) string {
 func (a *App) checkSeg(pr model.PullRequest) seg {
 	state, ok := a.checks[pr.Key()]
 	switch {
-	case !ok || state.loading:
+	case !ok || state.loading || state.headOID != "" && state.headOID != pr.HeadOID:
 		return seg{text: "checks…", style: a.styles.Meta}
+	case state.err != nil && len(state.checks) > 0:
+		counts := a.styles.checkCountSeg(model.CountChecks(state.checks))
+		return seg{text: "checks partial · " + ansi.Strip(counts.text), style: a.styles.Meta}
 	case state.err != nil:
 		return seg{text: "checks unavailable", style: a.styles.Meta}
 	default:
@@ -133,8 +138,14 @@ func (a *App) checkSeg(pr model.PullRequest) seg {
 // rollupFor prefers the freshly counted checks over the rollup that came with
 // the list, so the dot and the counts never disagree.
 func (a *App) rollupFor(pr model.PullRequest) model.Status {
-	if state, ok := a.checks[pr.Key()]; ok && state.loaded && state.err == nil && len(state.checks) > 0 {
+	if state, ok := a.checks[pr.Key()]; ok && state.loaded && (state.headOID == "" || state.headOID == pr.HeadOID) {
+		if state.err != nil {
+			return model.StatusUnknown
+		}
 		return model.CountChecks(state.checks).Rollup()
+	}
+	if pr.Rollup == model.StatusFailure {
+		return model.StatusUnknown
 	}
 	return pr.Rollup
 }
