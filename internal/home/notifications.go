@@ -68,6 +68,9 @@ func (e NotificationEvent) defaultOn() bool {
 // when prutil hands work to an agent. How often the open pull requests are
 // read for them is watch.list_interval, which auto-watch shares.
 type NotificationConfig struct {
+	// Sidebar keeps the notification history visible as a permanent column
+	// beside the detail pane.
+	Sidebar bool `yaml:"sidebar"`
 	// Events turns each notification on or off. An event the file does not
 	// mention takes its default.
 	Events map[NotificationEvent]bool `yaml:"events"`
@@ -139,6 +142,14 @@ func (s *Store) SetNotification(event NotificationEvent, on bool) error {
 			c.Notifications.Events = maps.Clone(c.Notifications.Events)
 		}
 		c.Notifications.Set(event, on)
+	})
+}
+
+// SetNotificationSidebar writes the notifications.sidebar setting into config.yaml,
+// and nothing else.
+func (s *Store) SetNotificationSidebar(on bool) error {
+	return s.SaveSetting([]string{"notifications", "sidebar"}, strconv.FormatBool(on), func(c *Config) {
+		c.Notifications.Sidebar = on
 	})
 }
 

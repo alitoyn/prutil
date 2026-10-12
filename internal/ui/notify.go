@@ -153,6 +153,14 @@ func (a *App) announce(changes []change) tea.Cmd {
 		if pr, ok := a.prByKey(c.key); ok {
 			title = pr.Title
 		}
+		kind := trayKindDesktop
+		switch c.kind.event {
+		case home.NotifyApproved:
+			kind = trayKindApproved
+		case home.NotifyChecksPassed:
+			kind = trayKindChecks
+		}
+		a.recordTrayNotification(c.key, title, c.kind.headline, title, kind)
 		toasts = append(toasts, desktop.Notification{Title: name, Body: title})
 		if a.armed(c.key) {
 			activity := c.kind.headline

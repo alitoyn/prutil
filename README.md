@@ -246,6 +246,7 @@ Each press does one thing, once, whether or not the pull request is watched.
 
 | Key | Action |
 | --- | --- |
+| `n` | open notification history: view session notifications in a popup or toggle sidebar focus |
 | `s` or `,` | open settings: desktop notifications, what is watched, poll timing, PR comments, coding agent and security |
 | `?` | open the shortcut overlay: type to filter, `enter` to run the highlighted shortcut, `esc` or `?` to close |
 | `q` or `ctrl+c` | quit |

@@ -32,6 +32,7 @@ type keyMap struct {
 	NextTab       key.Binding
 	Adopt         key.Binding
 	Release       key.Binding
+	Notifications key.Binding
 	Settings      key.Binding
 	Help          key.Binding
 	Quit          key.Binding
@@ -115,6 +116,10 @@ func defaultKeys() keyMap {
 		Release: key.NewBinding(
 			key.WithKeys("-"),
 			key.WithHelp("-", "release adopted PR"),
+		),
+		Notifications: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "notification history"),
 		),
 		// s for settings, and , because that is where the settings are in
 		// every macOS application.
@@ -264,6 +269,8 @@ func (k keyMap) helpSections(mouse bool) []helpSection {
 				detail: "Post the configured AI review comment, such as /gemini review, now. prutil posts it itself; no agent is involved. Press twice to confirm."},
 		}},
 		{title: "General", entries: []helpEntry{
+			{binding: k.Notifications, title: "notification history",
+				detail: "Open notification history. Select an entry and press enter to jump to that pull request."},
 			{binding: k.Settings, title: "settings",
 				detail: "View and edit settings: desktop notifications, what is watched, poll timing, PR comments, herdr and security. Each change is saved to config.yaml as you make it."},
 			{binding: k.Help, title: "keyboard shortcuts",
