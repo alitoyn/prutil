@@ -46,10 +46,7 @@ func (a *App) renderDetail(width, height int) []string {
 		return lines
 	}
 
-	if state.err != nil {
-		lines = append(lines, a.styles.Error.Render("partial checks · automatic check actions paused"))
-		lines = append(lines, wrapLines(state.err.Error(), width, 2)...)
-	}
+	lines = append(lines, a.partialCheckLines(state, width)...)
 	lines = append(lines, a.sectionHeading(fmt.Sprintf("CHECKS (%d)", len(state.checks)),
 		a.section == detailChecks))
 
@@ -198,6 +195,17 @@ func (a *App) renderCheck(check model.Check, width int, selected bool) string {
 	return prefix + justify(inner, left, right)
 }
 
+// partialCheckLines warns that the checks on screen are not all of them. It is
+// a function of its own because checksHeight has to count it too, or the
+// scroll clamp works to a taller window than the one drawn.
+func (a *App) partialCheckLines(state checkState, width int) []string {
+	if state.err == nil || len(state.checks) == 0 {
+		return nil
+	}
+	lines := []string{a.styles.Error.Render("partial checks · automatic check actions paused")}
+	return append(lines, wrapLines(state.err.Error(), width, 2)...)
+}
+
 // checksHeight is the number of lines the check list may occupy, used by the
 // scroll clamp before anything has been rendered.
 func (a *App) checksHeight() int {
@@ -214,7 +222,8 @@ func (a *App) checksHeight() int {
 	if len(watch) > 0 {
 		gap = 1
 	}
-	return checkWindow(a.bodyHeight(), len(header)+len(watch)+gap+1)
+	partial := a.partialCheckLines(a.checks[pr.Key()], detailWidth)
+	return checkWindow(a.bodyHeight(), len(header)+len(watch)+gap+len(partial)+1)
 }
 
 // checkWindow is the number of check lines that fit beneath a header of the

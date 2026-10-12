@@ -130,7 +130,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
                     checkSuite {
                       createdAt
                       app { id slug }
-                      workflowRun { workflow { id name } }
+                      workflowRun { event workflow { id name } }
                     }
                   }
                   ... on StatusContext {

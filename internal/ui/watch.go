@@ -186,6 +186,11 @@ func (a *App) investigateChecks(by key.Binding, allowProvision bool) tea.Cmd {
 				key, holdReason(a.runtimeOf(key).hold), by.Help().Key))
 		}
 		if partial {
+			// Asked before the confirmation, since the second press would only
+			// be refused: applyFailedChecks does not ask checkHandoff's question.
+			if a.runtimeOf(key).handing {
+				return status("already handing " + key.String() + " over")
+			}
 			if !a.confirms(key, confirmPartialChecks) {
 				a.pending.heldPassed = held
 				a.pending.checkHead = state.headOID
@@ -230,7 +235,7 @@ func (a *App) checkHandoff(force, allowProvision bool, headOID ...string) tea.Cm
 		entry.handing = false
 		return nil
 	}
-	if state.loaded && !force && (state.headOID == "" || state.headOID == entry.headOID) {
+	if state.loaded && !force && sameHead(state.headOID, entry.headOID) {
 		return a.applyFailedChecks(key, entry.headOID, state.checks, false, allowProvision)
 	}
 	return tea.Batch(a.loadChecksForHandoff(a.gen, key, entry.headOID, force, allowProvision), a.spin.Tick)

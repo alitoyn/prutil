@@ -92,7 +92,7 @@ func TestChecksDetailQueryPagesTheCurrentHeadWithoutWideningCheapQueries(t *test
 	for _, field := range []string{
 		"oid", "contexts(first: 100, after: $after)", "pageInfo { hasNextPage endCursor }",
 		"databaseId", "startedAt", "checkSuite", "createdAt", "app { id slug }",
-		"workflowRun { workflow { id name } }",
+		"workflowRun { event workflow { id name } }",
 	} {
 		assert.Contains(t, detailQuery, field)
 	}

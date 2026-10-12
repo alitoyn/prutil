@@ -2,7 +2,10 @@ package ui
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -178,4 +181,160 @@ func TestAResolvedHistoricalFailureCanRaiseAChecksPassedNotification(t *testing.
 
 	send(t, app, notifyPollMsg{at: app.now(), snaps: []model.Snapshot{snap}})
 	assert.Len(t, notifierOf(t, app).notifications(), 1, "the unchanged raw failure must not announce a second pass")
+}
+
+func TestAClosedRowSettlesOnceItsChecksAreRead(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	pr := sampleClosedPRs()[1]
+	require.Empty(t, pr.HeadOID, "the closed list does not select the head commit")
+
+	send(t, app, checksMsg{
+		gen: app.gen, key: pr.Key(), headOID: "abc", at: app.now(),
+		checks: []model.Check{{Name: "build", Status: model.StatusSuccess}},
+	})
+
+	assert.NotEqual(t, "checks…", app.checkSeg(pr).text,
+		"a row that never knew its head cannot disagree with the head the read found")
+	assert.Equal(t, model.StatusSuccess, app.rollupFor(pr))
+}
+
+func TestAnEmptyChecksReadDoesNotSilenceTheChecksPassedNotification(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	app.homeCfg.Notifications.Set(home.NotifyChecksPassed, true)
+	reload(t, app, withRollup(pr7, "c1", model.StatusPending))
+	// Read straight after the push, before Actions had queued anything.
+	send(t, app, checksMsg{gen: app.gen, key: pr7, headOID: "c1", at: app.now()})
+
+	reload(t, app, withRollup(pr7, "c1", model.StatusSuccess))
+	require.Len(t, notifierOf(t, app).notifications(), 1,
+		"a read that found no checks yet says nothing about whether they passed")
+	assert.Equal(t, "relloyd/other#7 checks passed", notifierOf(t, app).notifications()[0].Title)
+}
+
+func TestAnEmptyChecksReadGivesWayToTheListsRollupAndIsAskedAgain(t *testing.T) {
+	app, client, _ := newTestApp(t, 120, 40)
+	reload(t, app, withRollup(pr7, "c1", model.StatusPending))
+	send(t, app, checksMsg{gen: app.gen, key: pr7, headOID: "c1", at: app.now()})
+	before := client.checkCalls[pr7]
+
+	reload(t, app, withRollup(pr7, "c1", model.StatusSuccess))
+	pr, ok := app.prByKey(pr7)
+	require.True(t, ok)
+	assert.Equal(t, model.StatusSuccess, app.rollupFor(pr), "the dot follows the list until the checks are read")
+	assert.Greater(t, client.checkCalls[pr7], before, "checks that have since registered are read")
+}
+
+func TestACheckReadOlderThanTheWatchersReadingIsKeptNotLost(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	key := samplePRs()[0].Key()
+	app.views[viewOpen].prs[0].HeadOID = "abc"
+	asked := app.now()
+	app.checks[key] = checkState{loading: true, askedAt: asked}
+	entry := app.mutate(key)
+	entry.headOID, entry.headAt = "abc", asked.Add(time.Second)
+	entry.handing = true
+	app.setWatchOperation(key, "reading checks")
+
+	send(t, app, checksMsg{
+		gen: app.gen, key: key, headOID: "abc", at: asked, checkHandoff: true,
+		checks: []model.Check{{Name: "build", Status: model.StatusSuccess}},
+	})
+
+	assert.True(t, app.checks[key].loaded, "the detail is for the same head, so the pane shows it rather than loading forever")
+	assert.Empty(t, app.runtimeOf(key).operation, "the handoff it was read for is over")
+	assert.False(t, app.runtimeOf(key).handing)
+}
+
+func TestTheCheckScrollClampCountsThePartialWarning(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 30)
+	key := samplePRs()[0].Key()
+	checks := make([]model.Check, 0, 40)
+	for i := range 40 {
+		checks = append(checks, model.Check{Name: fmt.Sprintf("check-%02d", i), Status: model.StatusSuccess})
+	}
+	app.checks[key] = checkState{
+		loaded: true, headOID: app.views[viewOpen].prs[0].HeadOID, checks: checks,
+		err: errors.New("page two of the checks timed out after thirty seconds, so the rest of this list was never read"),
+	}
+
+	_, width := app.paneWidths()
+	drawn := 0
+	for _, line := range app.renderDetail(width, app.bodyHeight()) {
+		if strings.HasPrefix(plain(line), "  ✓ check-") {
+			drawn++
+		}
+	}
+	assert.Equal(t, drawn, app.checksHeight(), "the clamp scrolls by the rows actually drawn")
+}
+
+func TestAFailingRowBeyondThePrefetchIsStillResolved(t *testing.T) {
+	app, client, _ := newTestApp(t, 120, 40)
+	require.False(t, app.homeCfg.Notifications.Enabled(home.NotifyChecksPassed))
+	prs := samplePRs()
+	for i := range prefetchLimit + 5 {
+		pr := prs[0]
+		pr.Number, pr.NodeID, pr.HeadOID = 1000+i, fmt.Sprintf("PR_%d", 1000+i), fmt.Sprintf("h%d", i)
+		pr.Rollup = model.StatusSuccess
+		prs = append(prs, pr)
+	}
+	prs[len(prs)-1].Rollup = model.StatusFailure
+	deep := prs[len(prs)-1].Key()
+
+	reload(t, app, prs)
+
+	assert.Positive(t, client.checkCalls[deep],
+		"a raw failure is only provisional, so it is read wherever it sits in the list")
+}
+
+func TestAVerifiedFailureIsNotReadAgainOnEveryLoad(t *testing.T) {
+	app, client, _ := newTestApp(t, 120, 40)
+	app.homeCfg.Notifications.Set(home.NotifyChecksPassed, true)
+	client.checks[pr7] = []model.Check{{Name: "build", Status: model.StatusFailure}}
+	reload(t, app, withRollup(pr7, "c1", model.StatusFailure))
+	send(t, app, checksMsg{gen: app.gen, key: pr7, headOID: "c1", at: app.now(), checks: client.checks[pr7]})
+	before := client.checkCalls[pr7]
+
+	reload(t, app, withRollup(pr7, "c1", model.StatusFailure))
+	reload(t, app, withRollup(pr7, "c1", model.StatusFailure))
+
+	assert.Equal(t, before, client.checkCalls[pr7], "the detail already settled this head's verdict")
+}
+
+func TestARowKeepsItsCountsWhileTheyAreReadAgain(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	pr := app.views[viewOpen].prs[0]
+	app.checks[pr.Key()] = checkState{
+		loaded: true, loading: true, headOID: pr.HeadOID,
+		checks: []model.Check{{Name: "build", Status: model.StatusSuccess}},
+	}
+	assert.NotEqual(t, "checks…", app.checkSeg(pr).text, "a background re-read does not blank the row")
+}
+
+func TestConfirmingPartialChecksDoesNotStartASecondHandoff(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	key := samplePRs()[0].Key()
+	app.views[viewOpen].prs[0].HeadOID = "abc"
+	app.checks[key] = checkState{
+		headOID: "abc", loaded: true, err: errors.New("page two unavailable"),
+		checks: []model.Check{{Name: "build", Status: model.StatusFailure}},
+	}
+	app.mutate(key).handing = true
+
+	drain(send(t, app, press("F")))
+	drain(send(t, app, press("F")))
+
+	assert.Zero(t, checkHandoffs(dispatcherOf(t, app)), "one is already waiting on an agent")
+}
+
+func TestABackgroundCheckReadErrorLeavesTheStatusLineAlone(t *testing.T) {
+	app, _, _ := newTestApp(t, 120, 40)
+	key := samplePRs()[0].Key()
+
+	cmd := send(t, app, checksErrMsg{
+		gen: app.gen, key: key, headOID: app.views[viewOpen].prs[0].HeadOID, at: app.now(),
+		err: errors.New("timeout"),
+	})
+
+	assert.Empty(t, statuses(drain(cmd)),
+		"the row and the pane say so, and the status line may be holding a question")
 }

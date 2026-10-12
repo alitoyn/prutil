@@ -129,9 +129,8 @@ func readingsOfSnapshots(snaps []model.Snapshot, at time.Time) []reading {
 func (a *App) notice(readings []reading) tea.Cmd {
 	var changes []change
 	for _, r := range readings {
-		if state, ok := a.checks[r.key]; ok && state.loaded &&
-			(state.headOID == "" || state.headOID == r.facts.head) {
-			r.facts.checksKnown = state.err == nil && len(state.checks) > 0
+		if state, ok := a.detailFor(r.key, r.facts.head); ok {
+			r.facts.checksKnown = state.err == nil
 			r.facts.passed = r.facts.checksKnown &&
 				model.CountChecks(state.checks).Rollup() == model.StatusSuccess
 		}

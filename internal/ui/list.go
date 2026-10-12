@@ -123,7 +123,9 @@ func (a *App) ageText(pr model.PullRequest) string {
 func (a *App) checkSeg(pr model.PullRequest) seg {
 	state, ok := a.checks[pr.Key()]
 	switch {
-	case !ok || state.loading || state.headOID != "" && state.headOID != pr.HeadOID:
+	// A background re-read keeps the counts it already has on the row rather
+	// than blanking it to "checks…" every time it asks again.
+	case !ok || state.loading && !state.loaded || !sameHead(state.headOID, pr.HeadOID):
 		return seg{text: "checks…", style: a.styles.Meta}
 	case state.err != nil && len(state.checks) > 0:
 		counts := a.styles.checkCountSeg(model.CountChecks(state.checks))
@@ -138,7 +140,7 @@ func (a *App) checkSeg(pr model.PullRequest) seg {
 // rollupFor prefers the freshly counted checks over the rollup that came with
 // the list, so the dot and the counts never disagree.
 func (a *App) rollupFor(pr model.PullRequest) model.Status {
-	if state, ok := a.checks[pr.Key()]; ok && state.loaded && (state.headOID == "" || state.headOID == pr.HeadOID) {
+	if state, ok := a.detailFor(pr.Key(), pr.HeadOID); ok {
 		if state.err != nil {
 			return model.StatusUnknown
 		}

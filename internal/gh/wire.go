@@ -232,6 +232,7 @@ type contextNode struct {
 			Slug string `json:"slug"`
 		} `json:"app"`
 		WorkflowRun *struct {
+			Event    string `json:"event"`
 			Workflow struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`
@@ -248,9 +249,12 @@ type contextNode struct {
 }
 
 // checkKey identifies one logical check, not one attempt. A status context
-// and a check run may have the same name without being the same check.
+// and a check run may have the same name without being the same check, and
+// one workflow triggered by two events is two checks: GitHub shows test (push)
+// and test (pull_request) side by side, and a pass in one does not answer a
+// failure in the other.
 type checkKey struct {
-	kind, appID, workflowID, name string
+	kind, appID, workflowID, event, name string
 }
 
 func (n contextNode) key() checkKey {
@@ -263,6 +267,7 @@ func (n contextNode) key() checkKey {
 	}
 	if n.CheckSuite.WorkflowRun != nil {
 		key.workflowID = n.CheckSuite.WorkflowRun.Workflow.ID
+		key.event = n.CheckSuite.WorkflowRun.Event
 	}
 	return key
 }

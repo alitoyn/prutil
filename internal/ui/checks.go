@@ -5,7 +5,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/relloyd/prutil/internal/home"
 	"github.com/relloyd/prutil/internal/model"
 )
 
@@ -36,6 +35,33 @@ func (a *App) applyEffectiveChecks(key model.Key, head string, checks []model.Ch
 	return tea.Batch(notices, a.scheduleWatch(), a.postOnPass(key, head, status))
 }
 
+// sameHead reports whether a check read and a reading can be about the same
+// commit. An empty head is one nobody read, not a different commit: the closed
+// list never selects the head, so its rows would otherwise disagree with every
+// read of their checks for good.
+func sameHead(a, b string) bool {
+	return a == "" || b == "" || a == b
+}
+
+// detailFor is the cached detail that can stand for head: loaded, for that
+// commit, and saying something. A read that found no checks says nothing — it
+// is what a read taken before Actions queued anything finds — so the list's
+// own rollup speaks until the checks are read again.
+func (a *App) detailFor(key model.Key, head string) (checkState, bool) {
+	state, ok := a.checks[key]
+	if !ok || !state.loaded || !sameHead(state.headOID, head) {
+		return checkState{}, false
+	}
+	return state, state.err != nil || len(state.checks) > 0
+}
+
+// settled reports whether complete detail has reached a verdict that another
+// read of the same head would not be expected to change.
+func settled(state checkState) bool {
+	return state.err == nil && len(state.checks) > 0 &&
+		model.CountChecks(state.checks).Rollup() != model.StatusPending
+}
+
 func (a *App) clearStaleCheckRead(key model.Key, head string, at time.Time) {
 	state, ok := a.checks[key]
 	if ok && (state.headOID == "" || state.headOID == head) &&
@@ -44,14 +70,14 @@ func (a *App) clearStaleCheckRead(key model.Key, head string, at time.Time) {
 	}
 }
 
-// resolveFailureChecks fetches detail only for ambiguous rollups when the
-// checks-passed notification is enabled. The cheap list and snapshot reads
-// remain unchanged, and a watched PR already receives this read on its poll.
+// resolveFailureChecks fetches detail for an ambiguous rollup. It is not
+// gated on the checks-passed notification: a raw failure shows as unknown
+// until it is resolved, so a failing row the prefetch does not reach would
+// otherwise lose its red dot. needsCheckResolution keeps it to one read per
+// head once the verdict has settled. A watched pull request already receives
+// this read on its poll.
 func (a *App) resolveFailureChecks(key model.Key) tea.Cmd {
-	if !a.homeCfg.Notifications.Enabled(home.NotifyChecksPassed) || a.armed(key) {
-		return nil
-	}
-	if a.checks[key].loading {
+	if a.armed(key) || a.checks[key].loading {
 		return nil
 	}
 	state := a.checks[key]
@@ -61,19 +87,31 @@ func (a *App) resolveFailureChecks(key model.Key) tea.Cmd {
 	return a.loadChecks(a.gen, key)
 }
 
+// needsCheckResolution reports whether the cheap rollup for head has to be
+// checked against the detail.
+//
+// A raw failure is provisional until the detail says otherwise, but once the
+// detail for that head has settled, reading it again on every load would cost
+// a paginated read per failing pull request per interval and learn nothing:
+// GitHub's raw rollup for a head with old failures stays failed whatever the
+// newest attempts did. A new push changes the head, which asks again.
 func (a *App) needsCheckResolution(key model.Key, head string, raw model.Status) bool {
-	if raw == model.StatusFailure {
-		return true
-	}
 	state, ok := a.checks[key]
-	if !ok || !state.loaded || raw == model.StatusUnknown ||
-		(state.headOID != "" && state.headOID != head) {
+	if ok && state.loading {
 		return false
 	}
-	if state.err != nil {
+	current := ok && state.loaded && sameHead(state.headOID, head)
+	if raw == model.StatusFailure {
+		return !current || !settled(state)
+	}
+	if !current || raw == model.StatusUnknown {
+		return false
+	}
+	// An error, or an empty read the checks have registered since.
+	if state.err != nil || len(state.checks) == 0 {
 		return true
 	}
-	return len(state.checks) > 0 && model.CountChecks(state.checks).Rollup() != raw
+	return model.CountChecks(state.checks).Rollup() != raw
 }
 
 // provisionalCheckStatus withholds actions when a cheap rollup conflicts with
@@ -82,12 +120,11 @@ func (a *App) provisionalCheckStatus(key model.Key, head string, raw model.Statu
 	if raw == model.StatusFailure {
 		return model.StatusUnknown
 	}
-	state, ok := a.checks[key]
-	if !ok || !state.loaded || state.headOID != "" && state.headOID != head {
+	state, ok := a.detailFor(key, head)
+	if !ok {
 		return raw
 	}
-	if state.err != nil || len(state.checks) > 0 &&
-		model.CountChecks(state.checks).Rollup() != raw {
+	if state.err != nil || model.CountChecks(state.checks).Rollup() != raw {
 		return model.StatusUnknown
 	}
 	return raw

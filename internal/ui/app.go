@@ -659,6 +659,11 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		watching := tea.Batch(a.watchAfterLoad(msg.view), adopted)
 		watching = tea.Batch(watching, a.applyAutoWatch(msg))
 		notices := a.noticeAfterLoad(msg)
+		// Apart from the notifications, because it is the list's own dot that
+		// a provisional failure leaves unknown, whatever is switched on.
+		if msg.view == viewOpen {
+			notices = tea.Batch(notices, a.resolveFailedPRs(a.views[viewOpen].prs))
+		}
 		history := a.loadSelectedHandoffHistory()
 		if msg.partial {
 			// The sweep's first page is on screen and already interactive;
@@ -718,9 +723,14 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if watched := a.runtimeOf(msg.key); !msg.at.IsZero() && msg.headOID != "" &&
 			watched.headOID == msg.headOID && msg.at.Before(watched.headAt) {
-			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
+			// The watcher has read this head since, so this read must not move
+			// the watcher's state back. Its checks are still this head's, and
+			// dropping them would leave the pane loading with nothing to ask again.
+			a.checks[msg.key] = checkState{checks: msg.checks, headOID: msg.headOID, loaded: true, askedAt: msg.at}
+			a.clampScroll()
 			if msg.checkHandoff {
 				a.mutate(msg.key).handing = false
+				a.setWatchOperation(msg.key, "")
 			}
 			return a, nil
 		}
@@ -752,20 +762,16 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		}
-		if watched := a.runtimeOf(msg.key); !msg.at.IsZero() && msg.headOID != "" &&
-			watched.headOID == msg.headOID && msg.at.Before(watched.headAt) {
-			a.clearStaleCheckRead(msg.key, msg.headOID, msg.at)
-			if msg.checkHandoff {
-				a.mutate(msg.key).handing = false
-			}
-			return a, nil
-		}
 		a.checks[msg.key] = checkState{checks: msg.checks, headOID: msg.headOID, err: msg.err, loaded: true, askedAt: msg.at}
 		a.clampScroll()
-		if msg.checkHandoff {
-			a.mutate(msg.key).handing = false
-			a.setWatchOperation(msg.key, "")
+		if !msg.checkHandoff {
+			// The row and the pane already say so. A background read failing is
+			// not worth the status line, which may be holding a question the
+			// reader has yet to answer.
+			return a, nil
 		}
+		a.mutate(msg.key).handing = false
+		a.setWatchOperation(msg.key, "")
 		return a, status("could not read all checks on " + msg.key.String() + ": " + msg.err.Error())
 
 	case selectionMsg:
@@ -1513,11 +1519,7 @@ func (a *App) noticeAfterLoad(msg prsMsg) tea.Cmd {
 	if msg.view != viewOpen {
 		return nil
 	}
-	return tea.Batch(
-		a.notice(readingsOfPRs(a.views[viewOpen].prs, msg.at)),
-		a.resolveFailedPRs(a.views[viewOpen].prs),
-		a.scheduleListRead(),
-	)
+	return tea.Batch(a.notice(readingsOfPRs(a.views[viewOpen].prs, msg.at)), a.scheduleListRead())
 }
 
 // loadClosed fetches the first page of the recently closed sweep and returns

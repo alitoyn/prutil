@@ -265,3 +265,24 @@ func TestChecksUsesSuiteCreationWhenAQueuedRunHasNoStartOrID(t *testing.T) {
 	require.Len(t, result.Checks, 1)
 	assert.Equal(t, model.StatusPending, result.Checks[0].Status)
 }
+
+// runOn is run for a workflow triggered by a particular event.
+func runOn(event, name, app, workflow string, id int, started, status, conclusion string) map[string]any {
+	node := run(name, app, workflow, id, started, started, status, conclusion)
+	node["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)["event"] = event
+	return node
+}
+
+func TestChecksKeepsAWorkflowsRunsForDifferentEventsApart(t *testing.T) {
+	old := "2026-10-09T10:00:00Z"
+	newest := "2026-10-12T10:00:00Z"
+	runner := &fakeRunner{responses: [][]byte{checksPage(t, "head", "", false,
+		runOn("push", "test", "actions", "ci", 10, old, "COMPLETED", "FAILURE"),
+		runOn("pull_request", "test", "actions", "ci", 11, newest, "COMPLETED", "SUCCESS"),
+	)}}
+
+	result, err := gh.New(runner, 1).Checks(context.Background(), model.Key{Repo: "a/b", Number: 1})
+	require.NoError(t, err)
+	assert.Equal(t, model.CheckCounts{Success: 1, Failure: 1, Total: 2}, model.CountChecks(result.Checks),
+		"GitHub shows test (push) and test (pull_request) as two checks, and a pass in one does not answer a failure in the other")
+}
