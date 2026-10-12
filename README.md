@@ -86,7 +86,7 @@ in [`config.yaml`](#configuration).
 | held | prutil found a comment it will not send unasked, from somebody outside the trust boundary or with hidden text in it. |
 | notification | a desktop notification from your operating system, such as an approval. |
 | toast | herdr's own notification that a send happened, `herdr.toast`. |
-| check | a CI check on the pull request's head commit. GitHub's rollup can include old runs of the same check on that commit; prutil uses the newest run of each check for its verdict. |
+| check | a CI check on the pull request's head commit. GitHub's rollup can include old runs of the same check on that commit; prutil uses the newest run of each check for its verdict, and counts a workflow triggered by two events, such as `test (push)` and `test (pull_request)`, as two checks. |
 
 ## Self-healing pull requests
 
@@ -300,9 +300,10 @@ reports why.
 While any notification is on, prutil re-reads every open pull request every two
 minutes (**Open list re-read interval** under `POLL TIMING` in `s`,
 `watch.list_interval`), using the watcher's cheap query: one request, and one
-rate limit point, per hundred pull requests. If the checks-passed notification
-is on and a rollup is ambiguous, prutil also reads that pull request's check
-detail before treating it as passed. With new PR watching on, the same
+rate limit point, per hundred pull requests. When a rollup is ambiguous,
+prutil also reads that pull request's check detail before treating it as
+passed. A failing rollup is read once per head commit, whether or not any
+notification is on, and not again until the head changes. With new PR watching on, the same
 interval runs the whole search instead, which serves the notifications too. A
 watched pull request is also read on the watcher's own schedule, and a refresh
 reads the whole list, so either may notice a change sooner. The first reading of each pull request after prutil starts only records
