@@ -57,6 +57,7 @@ type pane int
 const (
 	paneList pane = iota
 	paneDetail
+	paneNotifications
 )
 
 // detailSection is the section selected in the normal detail pane.
@@ -236,6 +237,8 @@ type App struct {
 	settings settingsPane
 	// adopt is the + pane, drawn over everything else while open.
 	adopt adoptPane
+	// tray holds in-memory session notification history.
+	tray trayState
 	// own is the set of pull requests the open list's own search returned on
 	// its last load, which is what tells a released adoption whose row should
 	// go from one that is the reader's own as well.
@@ -501,6 +504,7 @@ func New(cfg Config) *App {
 		now:      now,
 		version:  cfg.Version,
 		keys:     defaultKeys(),
+		tray:     trayState{keys: defaultTrayKeys()},
 		styles:   styles,
 		help:     help.New(),
 		spin:     sp,
@@ -564,6 +568,11 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 	}
+	if a.tray.popupOpen {
+		if cmd, handled := a.updateTrayPopup(msg); handled {
+			return a, cmd
+		}
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -576,6 +585,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(a.cur().prs) == 0 {
 				a.focus = paneList
 			}
+		}
+		if a.focus == paneNotifications && !a.sidebarVisible() {
+			a.focus = paneList
 		}
 		a.clampScroll()
 		a.resizeHelp()
@@ -861,16 +873,37 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Release):
 		return a, a.releaseAdopted()
 
+	case key.Matches(msg, a.keys.Notifications):
+		a.toggleNotifications()
+		return a, nil
+
+	case key.Matches(msg, a.keys.PinSidebar) && a.focus == paneNotifications:
+		return a, a.toggleSidebarMode()
+
 	case key.Matches(msg, a.keys.Into):
 		if a.focus == paneList && len(a.cur().prs) > 0 {
 			a.focus = paneDetail
 			a.resetDetailNavigation()
 			return a, a.withSpinner(a.ensureChecks(a.selectedKey()))
 		}
-		a.intoWatchLog()
+		if a.focus == paneDetail {
+			if a.intoWatchLog() {
+				return a, nil
+			}
+			if a.sidebarVisible() {
+				a.focus = paneNotifications
+				a.tray.markAllRead()
+				a.clampTrayScroll()
+				return a, nil
+			}
+		}
 		return a, nil
 
 	case key.Matches(msg, a.keys.Back):
+		if a.focus == paneNotifications {
+			a.focus = paneDetail
+			return a, nil
+		}
 		if a.focus == paneDetail && a.page == detailWatchPage {
 			a.page = detailOverview
 			a.watchOffset = 0
@@ -882,6 +915,9 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case key.Matches(msg, a.keys.Open):
+		if a.focus == paneNotifications {
+			return a, a.openNotificationPR()
+		}
 		// On the WATCH heading there is nothing of its own to open — the
 		// browser would get the pull request, which enter already does from
 		// the list — so it drills in, the way the same row answers →.
@@ -929,6 +965,9 @@ func (a *App) handleWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	if _, over := a.listIndexAt(msg.X, msg.Y); over && a.focus != paneList {
 		a.focus = paneList
 		a.resetDetailNavigation()
+	} else if _, over := a.trayIndexAt(msg.X, msg.Y); over && a.focus != paneNotifications {
+		a.focus = paneNotifications
+		a.tray.markAllRead()
 	}
 	return a, a.move(delta)
 }
@@ -939,6 +978,13 @@ func (a *App) handleMouse(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	if index, ok := a.trayIndexAt(msg.X, msg.Y); ok {
+		a.focus = paneNotifications
+		a.tray.cursor = index
+		a.tray.markAllRead()
+		return a, a.openNotificationPR()
+	}
+
 	index, ok := a.listIndexAt(msg.X, msg.Y)
 	if !ok {
 		return a, nil
@@ -947,6 +993,34 @@ func (a *App) handleMouse(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	a.focus = paneList
 	a.resetDetailNavigation()
 	return a, a.selectList(index)
+}
+
+// trayIndexAt maps a terminal coordinate to a visible notification row in the sidebar.
+func (a *App) trayIndexAt(x, y int) (int, bool) {
+	if !a.sidebarVisible() {
+		return 0, false
+	}
+
+	_, _, trayWidth := a.bodyWidths()
+	trayX := a.width - trayWidth
+	if x < trayX || x >= a.width {
+		return 0, false
+	}
+
+	bodyY := y - headerHeight - trayPaneHeader
+	if bodyY < 0 {
+		return 0, false
+	}
+
+	row := bodyY / trayRowHeight
+	if row >= a.traySidebarRows() {
+		return 0, false
+	}
+	index := a.tray.offset + row
+	if index < 0 || index >= len(a.tray.items) {
+		return 0, false
+	}
+	return index, true
 }
 
 // listIndexAt maps a terminal coordinate to a visible pull-request row.
@@ -992,6 +1066,12 @@ func (a *App) jump(index int) tea.Cmd {
 		return nil
 	}
 	index = min(max(index, 0), count-1)
+
+	if a.focus == paneNotifications {
+		a.tray.cursor = index
+		a.clampTrayScroll()
+		return nil
+	}
 
 	if a.focus == paneDetail {
 		if a.page == detailWatchPage {
@@ -1064,6 +1144,20 @@ func (a *App) copyURL() tea.Cmd {
 // under the list cursor, or the check under the detail cursor when that pane
 // has focus and the check has a link of its own.
 func (a *App) selectedTarget() (target, label string, ok bool) {
+	if a.focus == paneNotifications || a.tray.popupOpen {
+		item, ok := a.selectedTrayItem()
+		if !ok {
+			return "", "", false
+		}
+		if pr, found := a.findPR(item.key); found && pr.URL != "" {
+			return pr.URL, item.key.String(), true
+		}
+		if item.url != "" {
+			return item.url, item.key.String(), true
+		}
+		return "", "", false
+	}
+
 	pr, ok := a.selectedPR()
 	if !ok {
 		return "", "", false
@@ -1432,6 +1526,9 @@ func (a *App) selectedChecks() checkState {
 
 // cursorIndex is the cursor of the focused pane.
 func (a *App) cursorIndex() int {
+	if a.focus == paneNotifications {
+		return a.tray.cursor
+	}
 	if a.focus == paneDetail {
 		if a.page == detailWatchPage {
 			return a.watchOffset
@@ -1443,6 +1540,9 @@ func (a *App) cursorIndex() int {
 
 // itemCount is the number of rows in the focused pane.
 func (a *App) itemCount() int {
+	if a.focus == paneNotifications {
+		return len(a.tray.items)
+	}
 	if a.focus == paneDetail {
 		if a.page == detailWatchPage {
 			return a.watchLineCount()
@@ -1505,6 +1605,7 @@ func (a *App) narrow() bool {
 // current window size.
 func (a *App) clampScroll() {
 	a.normalizeDetailSelection()
+	a.clampTrayScroll()
 
 	state := a.cur()
 	state.cursor = min(max(state.cursor, 0), max(len(state.prs)-1, 0))

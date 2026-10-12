@@ -634,6 +634,7 @@ func (a *App) stopForOtherAgent(key model.Key, hold model.Hold) tea.Cmd {
 	a.clearWatch(key, "stopped watching: "+why)
 
 	pr, _ := a.prByKey(key)
+	a.recordTrayNotification(key, pr.Title, "stopped watching", why, trayKindWatch)
 	if a.store != nil {
 		_ = a.store.AppendHandoff(home.Handoff{
 			At:      a.now(),
@@ -686,11 +687,16 @@ func (a *App) watchCaution(key model.Key) string {
 // this one only did not because the decision is made before Dispatch.
 func (a *App) announceHold(pr model.PullRequest, held, why string) tea.Cmd {
 	entry := a.mutate(pr.Key())
-	if a.hand == nil || entry.heldAnnounced == entry.holdMark {
+	if entry.heldAnnounced == entry.holdMark {
 		return nil
 	}
 	entry.heldAnnounced = entry.holdMark
 
+	a.recordTrayNotification(pr.Key(), pr.Title, held+" held", why, trayKindHold)
+
+	if a.hand == nil {
+		return nil
+	}
 	hand, title := a.hand, pr.Key().String()+": "+held+" held"
 	return func() tea.Msg {
 		hand.Notify(context.Background(), title, why+" · W to send it anyway")
@@ -1022,12 +1028,18 @@ func (a *App) applyHandoff(msg handoffMsg) error {
 		outcome = home.OutcomeFailed
 	}
 	event := "handoff " + outcome
-	if msg.result.Detail != "" {
-		event += ": " + msg.result.Detail
+	detail := msg.result.Detail
+	if detail != "" {
+		event += ": " + detail
 	} else if msg.err != nil {
-		event += ": " + msg.err.Error()
+		detail = msg.err.Error()
+		event += ": " + detail
 	}
 	a.recordWatchActivity(msg.pr.Key(), event)
+	if detail == "" && msg.pr.Title != "" {
+		detail = msg.pr.Title
+	}
+	a.recordTrayNotification(msg.pr.Key(), msg.pr.Title, "handoff "+outcome, detail, trayKindHandoff)
 	return recordErr
 }
 
