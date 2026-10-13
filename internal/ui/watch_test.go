@@ -438,7 +438,7 @@ func pump(t *testing.T, app *App, cmd tea.Cmd) {
 		switch msg.(type) {
 		case watchTickMsg:
 			continue
-		case watchSnapshotMsg, watchReviewMsg, watchErrMsg, handoffMsg:
+		case watchSnapshotMsg, watchReviewMsg, watchErrMsg, handoffMsg, checksMsg:
 			pump(t, app, send(t, app, msg))
 		default:
 			send(t, app, msg)
@@ -1595,6 +1595,7 @@ func TestAFailedCheckStillGoesToAnAgentWhenNothingIsHeld(t *testing.T) {
 	send(t, app, press("w"))
 	poll(t, app)
 	sent := len(dispatcher.requests())
+	app.mutate(key).headOID = "sha-new"
 
 	pump(t, app, send(t, app, checksMsg{
 		gen: app.gen, key: key, checkHandoff: true, headOID: "sha-new",
@@ -2015,6 +2016,7 @@ func TestAnAutomaticCheckHandoffIsNotManualAndKnowsTheViewer(t *testing.T) {
 
 	send(t, app, press("w"))
 	poll(t, app)
+	app.mutate(key).headOID = "sha-new"
 	pump(t, app, send(t, app, checksMsg{
 		gen: app.gen, key: key, checkHandoff: true, headOID: "sha-new",
 		checks: []model.Check{{Name: "build", Status: model.StatusFailure}},

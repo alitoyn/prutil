@@ -36,7 +36,7 @@ func (a *App) renderDetail(width, height int) []string {
 	state := a.checks[pr.Key()]
 
 	switch {
-	case state.err != nil:
+	case state.err != nil && len(state.checks) == 0:
 		lines = append(lines, sectionPad+a.styles.Error.Render("checks unavailable"))
 		for _, line := range wrapLines(state.err.Error(), width-sectionIndent, 3) {
 			lines = append(lines, sectionPad+line)
@@ -50,6 +50,7 @@ func (a *App) renderDetail(width, height int) []string {
 		return lines
 	}
 
+	lines = append(lines, a.partialCheckLines(state, width)...)
 	// The chip goes on the check that is selected rather than on its heading
 	// as well, so there is one mark for the one thing selected. The heading
 	// brightens to say which section the cursor is in.
@@ -239,6 +240,20 @@ func (a *App) renderCheck(check model.Check, width int, selected bool) string {
 	return prefix + justify(inner, left, right)
 }
 
+// partialCheckLines warns that the checks on screen are not all of them. It is
+// a function of its own because checksHeight has to count it too, or the
+// scroll clamp works to a taller window than the one drawn.
+func (a *App) partialCheckLines(state checkState, width int) []string {
+	if state.err == nil || len(state.checks) == 0 {
+		return nil
+	}
+	lines := []string{sectionPad + a.styles.Error.Render("partial checks · automatic check actions paused")}
+	for _, line := range wrapLines(state.err.Error(), width-sectionIndent, 2) {
+		lines = append(lines, sectionPad+line)
+	}
+	return lines
+}
+
 // checksHeight is the number of lines the check list may occupy, used by the
 // scroll clamp before anything has been rendered.
 func (a *App) checksHeight() int {
@@ -255,7 +270,8 @@ func (a *App) checksHeight() int {
 	if len(watch) > 0 {
 		gap = 1
 	}
-	return checkWindow(a.bodyHeight(), len(header)+len(watch)+gap+1)
+	partial := a.partialCheckLines(a.checks[pr.Key()], detailWidth)
+	return checkWindow(a.bodyHeight(), len(header)+len(watch)+gap+len(partial)+1)
 }
 
 // checkWindow is the number of check lines that fit beneath a header of the
