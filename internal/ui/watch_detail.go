@@ -189,7 +189,7 @@ func (a *App) watchDetail(pr model.PullRequest, width, budget int, selected bool
 		return nil
 	}
 
-	lines := []string{a.sectionHeading("WATCH", selected)}
+	lines := []string{a.drillHeading("WATCH", selected, width)}
 	// The state line is always shown, and may take a second line when the
 	// budget has room for one.
 	for _, row := range wrapRow(a.compactState(facts), width, max(min(2, budget-1), 1)) {
