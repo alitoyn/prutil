@@ -135,6 +135,14 @@ a GitHub Enterprise host.
 
 ## Install
 
+Download an archive for your platform from the
+[releases page](https://github.com/relloyd/prutil/releases), and put the
+`prutil` binary on your `PATH`. The binaries are not signed. If macOS stops
+a binary that you downloaded with a browser, run
+`xattr -d com.apple.quarantine prutil`.
+
+To build from source, use this command:
+
 ```sh
 task install     # tidy, vet, lint, test, build and go install
 ```

@@ -1,0 +1,45 @@
+# GoReleaser builds and publishes prutil's release archives. The release
+# workflow (.github/workflows/release.yml) tags main and runs it; nothing here
+# is meant to be run by hand except `goreleaser release --snapshot --clean`
+# to see what a release would contain.
+version: 2
+
+project_name: prutil
+
+builds:
+  - main: ./cmd/prutil
+    binary: prutil
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # The same flags as the Taskfile, so `prutil -version` reads the same
+    # whichever way it was built.
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+    # Reproducible: the same commit builds the same bytes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  # Lists the pull requests merged since the previous tag.
+  use: github-native
+
+release:
+  # A rerun of a release that failed part way uploads over what is there.
+  replace_existing_artifacts: true
