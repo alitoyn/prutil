@@ -258,12 +258,18 @@ func TestTheCheckScrollClampCountsThePartialWarning(t *testing.T) {
 	}
 
 	_, width := app.paneWidths()
-	drawn := 0
+	drawn, warned := 0, false
 	for _, line := range app.renderDetail(width, app.bodyHeight()) {
 		if strings.HasPrefix(plain(line), "  ✓ check-") {
 			drawn++
 		}
+		if strings.Contains(plain(line), "partial checks") {
+			warned = true
+			assert.True(t, strings.HasPrefix(plain(line), sectionPad+"partial checks"),
+				"the warning lines up with the section headings: %q", plain(line))
+		}
 	}
+	require.True(t, warned, "the partial warning is drawn")
 	assert.Equal(t, drawn, app.checksHeight(), "the clamp scrolls by the rows actually drawn")
 }
 

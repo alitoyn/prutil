@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -35,14 +36,16 @@ func (a *App) renderDetail(width, height int) []string {
 
 	switch {
 	case state.err != nil && len(state.checks) == 0:
-		lines = append(lines, a.styles.Error.Render("checks unavailable"))
-		lines = append(lines, wrapLines(state.err.Error(), width, 3)...)
+		lines = append(lines, sectionPad+a.styles.Error.Render("checks unavailable"))
+		for _, line := range wrapLines(state.err.Error(), width-sectionIndent, 3) {
+			lines = append(lines, sectionPad+line)
+		}
 		return lines
 	case !state.loaded:
-		lines = append(lines, a.styles.Meta.Render(a.spin.View()+" loading checks…"))
+		lines = append(lines, sectionPad+a.styles.Meta.Render(a.spin.View()+" loading checks…"))
 		return lines
 	case len(state.checks) == 0:
-		lines = append(lines, a.styles.Meta.Render("no checks on the head commit"))
+		lines = append(lines, sectionPad+a.styles.Meta.Render("no checks on the head commit"))
 		return lines
 	}
 
@@ -63,9 +66,18 @@ func (a *App) renderDetail(width, height int) []string {
 	return lines
 }
 
+// sectionIndent is how far everything under the pull request's header sits in
+// from the pane's edge: the section headings, and every line beneath them. The
+// headings need the room for the selection bar, and what they head lines up
+// with them rather than sitting outdented beneath.
+const sectionIndent = 2
+
+// sectionPad is sectionIndent as the spaces it takes.
+var sectionPad = strings.Repeat(" ", sectionIndent)
+
 // sectionHeading renders one of the selectable detail sections.
 func (a *App) sectionHeading(text string, selected bool) string {
-	prefix := "  "
+	prefix := sectionPad
 	style := a.styles.SectionHdr
 	if selected {
 		prefix = a.styles.SelectBar.Render("▌") + " "
@@ -154,11 +166,11 @@ func (a *App) detailHeader(pr model.PullRequest, width int) []string {
 // renderCheck draws one check run as a single line: state, name, and how long
 // it took, with the duration pushed to the right-hand edge.
 func (a *App) renderCheck(check model.Check, width int, selected bool) string {
-	prefix := "  "
+	prefix := sectionPad
 	if selected {
 		prefix = a.styles.SelectBar.Render("▌") + " "
 	}
-	inner := max(width-2, 1)
+	inner := max(width-sectionIndent, 1)
 
 	right := ""
 	if d := model.HumanDuration(check.Duration(a.now())); d != "" {
@@ -202,8 +214,11 @@ func (a *App) partialCheckLines(state checkState, width int) []string {
 	if state.err == nil || len(state.checks) == 0 {
 		return nil
 	}
-	lines := []string{a.styles.Error.Render("partial checks · automatic check actions paused")}
-	return append(lines, wrapLines(state.err.Error(), width, 2)...)
+	lines := []string{sectionPad + a.styles.Error.Render("partial checks · automatic check actions paused")}
+	for _, line := range wrapLines(state.err.Error(), width-sectionIndent, 2) {
+		lines = append(lines, sectionPad+line)
+	}
+	return lines
 }
 
 // checksHeight is the number of lines the check list may occupy, used by the
