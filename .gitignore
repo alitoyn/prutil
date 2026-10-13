@@ -34,4 +34,6 @@ go.work.sum
 # Build output
 /bin/
 /dist/
+# Written by .github/scripts/third-party-notices.sh for each release.
+/THIRD_PARTY_NOTICES.txt
 .DS_Store
