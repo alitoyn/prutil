@@ -690,6 +690,13 @@ GoReleaser (`.goreleaser.yaml`) uploads the archives to the GitHub release
 itself. Do not add an `actions/upload-artifact` step: release assets are free,
 and Actions artifact storage counts against the account's quota.
 
+Every archive carries `LICENSE` and `THIRD_PARTY_NOTICES.txt`, because the
+MIT and BSD licences of what is compiled in, Go's standard library included,
+ask for their notices to travel with the binary. GoReleaser's before hook runs
+`.github/scripts/third-party-notices.sh`, which reads the import graph at
+release time, so the file is never committed and never stale. The hook names
+the operating systems to read it for; keep them in step with `goos`.
+
 ## Things to avoid
 
 - Reading `~/.config/gh/hosts.yml` or otherwise handling tokens. gh owns auth.
