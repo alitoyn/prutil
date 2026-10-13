@@ -676,6 +676,20 @@ setting that is not in the file must not be one prutil is acting on.
 `TestEverySettingAnswersItsOwnControls` runs one case per registered setting, so a
 new one is covered by adding it.
 
+## Releasing
+
+Every push to `main` runs `.github/workflows/release.yml`. A pull request's
+title becomes its merge commit's subject, and `.github/scripts/next-version.sh`
+reads those subjects on main's first-parent line since the last tag: `feat`
+bumps the minor version, `fix` and `perf` bump the patch, and `type!:` or a
+`BREAKING CHANGE:` line is major (minor while the version is 0.x). Anything
+else releases nothing. So a pull request title must be a conventional-commit
+subject, and its type is a release decision.
+
+GoReleaser (`.goreleaser.yaml`) uploads the archives to the GitHub release
+itself. Do not add an `actions/upload-artifact` step: release assets are free,
+and Actions artifact storage counts against the account's quota.
+
 ## Things to avoid
 
 - Reading `~/.config/gh/hosts.yml` or otherwise handling tokens. gh owns auth.
