@@ -11,10 +11,11 @@ import (
 
 // agy runs terminal commands inside its built-in Standard Sandbox Mode by
 // default (BypassSandbox: false, no network access, workspace-only writes) and
-// protects ~/.gemini/antigravity-cli/settings.json at the system boundary. A
-// session is contained unless it was launched with --dangerously-skip-permissions
-// or the reader's settings.json disables the terminal sandbox or grants
-// unsandboxed/wildcard permissions.
+// protects ~/.gemini/antigravity-cli/settings.json at the system boundary
+// (verified on agy 1.2.11 / 1.4.9; agyInspect does not check the binary
+// version, so re-probe on version bumps). A session is contained unless it was
+// launched with --dangerously-skip-permissions or the reader's settings.json
+// disables the terminal sandbox or grants unsandboxed/wildcard permissions.
 func agy() Profile {
 	return Profile{Kind: "agy", Bin: "agy", Launch: agyLaunch, Inspect: agyInspect}
 }

@@ -607,7 +607,7 @@ deny a file *read* by path in 1.0.88, so the earlier plan to add those flags
 was not implementable. Domain-limited outbound network is likewise not an
 OS sandbox setting in this release; the profile cannot claim that guarantee.
 
-**Antigravity CLI (profile built, default terminal sandbox and settings protection verified).**
+**Antigravity CLI (profile built, default terminal sandbox and settings protection verified on 1.2.11 / 1.4.9).**
 `agy` runs terminal commands inside its built-in Standard Sandbox Mode
 (`BypassSandbox: false`) by default on normal launches, confining filesystem
 access outside the workspace and blocking network access unless the reader
@@ -622,7 +622,10 @@ a value other than `""` (unset), `"ask"`, or `"proceed-in-sandbox"`, or when
 `permissions.allow` includes an `unsandboxed` or wildcard URL rule
 (`read_url(*)`, `execute_url(*)`). `Strict` stays false because a person may
 approve a bypass. There is no launch-time settings flag or vendor status
-command in 1.2.11.
+command in 1.2.11 / 1.4.9, and `Inspect` does not check the running `agy`
+version; bumping the verified `agy` version requires re-probing that the
+built-in terminal sandbox remains on by default and that `settings.json`
+remains protected when the file is absent.
 
 ### 2c. Automatic handoffs go only to contained agents (built)
 
