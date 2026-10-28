@@ -549,8 +549,12 @@ agent qualifies when prutil set its workspace up for the pull request, when its
 branch tracks the pull request's head branch or has the same name, or when its
 checkout holds the pull request's latest commit. Branch names are never compared
 for a likeness: `fix/retry` and `feat/retry` are different work, and so are
-`main` and `chore/sync-main`. When more than one agent qualifies, the stronger
-evidence wins, then the one ready for input. The prompt carries a warning only
+`main` and `chore/sync-main`. By default (`herdr.prefer_active_agent: true`), any
+running agent already working on the pull request qualifies regardless of
+`herdr.agent_kind`; when more than one agent qualifies, the stronger evidence
+wins, then the one ready for input, and then `herdr.agent_kind` breaks ties. Set
+`herdr.prefer_active_agent: false` to restrict handoffs strictly to agents of
+`herdr.agent_kind`. The prompt carries a warning only
 when there is something true to say: the checkout is behind the pull request, or
 holds its commits on a branch that will not reach it.
 
@@ -650,7 +654,8 @@ optional, and these are the defaults:
 
 ```yaml
 herdr:
-  agent_kind: claude        # required whenever prutil starts an agent
+  agent_kind: claude        # default agent kind started when provisioning a workspace
+  prefer_active_agent: true # use any active agent already on the PR regardless of agent_kind
   skill: pr-comment-triage  # the skill the default prompt invokes
   wait_for_idle: 15m        # how long to wait for a busy agent
   dry_run: false
@@ -818,11 +823,12 @@ or relocate sign-in.
 paths to `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/herdr` and
 `~/.config/prutil` in `sandbox.userPolicy.filesystem.deniedPaths`.
 
-**For agy**,
-set `enableTerminalSandbox: true`, `toolPermission: "proceed-in-sandbox"`,
-and restricted `read_url(domain)` entries in `permissions.allow`; do not
-allow `unsandboxed` or wildcard URL rules. With a missing or permissive
-policy, automatic handoffs are refused until you configure it.
+**For agy**, commands run inside its built-in terminal sandbox by default, so a
+normal `agy` session is accepted as contained unless `--dangerously-skip-permissions`
+was passed or `~/.gemini/antigravity-cli/settings.json` sets
+`enableTerminalSandbox: false`, sets `toolPermission` to a value other than
+`"ask"` or `"proceed-in-sandbox"`, or includes `unsandboxed` or wildcard URL
+rules in `permissions.allow`.
 
 These checks
 are **not proof of OS isolation**: a live agent must still verify secret

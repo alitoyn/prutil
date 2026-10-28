@@ -29,8 +29,11 @@ func DefaultConfigTemplate() []byte {
 	out.WriteString("# All keys are optional. Remove any key to use prutil's built-in default.\n\n")
 
 	out.WriteString("herdr:\n")
-	out.WriteString("  # Optional: restrict handoffs to one agent kind (for example \"claude\" or \"copilot\").\n")
+	out.WriteString("  # Optional: default agent kind to start when provisioning (for example \"claude\" or \"opencode\"),\n")
+	out.WriteString("  # and the kind filter when prefer_active_agent is false.\n")
 	out.WriteString("  agent_kind: \"\"\n")
+	out.WriteString("  # Use any agent already working on the pull request before filtering by agent_kind.\n")
+	_, _ = fmt.Fprintf(&out, "  prefer_active_agent: %t\n", cfg.Herdr.PreferActiveAgent)
 	out.WriteString("  # Optional: a herdr skill name that receives each pull request URL.\n")
 	out.WriteString("  skill: \"\"\n")
 	out.WriteString("  # Prompt template rendered with Repo, Number, URL, Title, HeadRef, BaseRef,\n")

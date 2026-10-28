@@ -637,13 +637,24 @@ func allSettings() []settingDescriptor {
 			id:      "herdr.agent_kind",
 			section: "CODING AGENT (HERDR)",
 			title:   "Agent kind filter",
-			detail:  "Restrict handoffs to one kind of agent (such as 'claude' or 'copilot'). Empty allows any agent.",
+			detail:  "Default agent kind started when provisioning (such as 'claude' or 'opencode'), and the kind filter when 'Prefer active agent on PR' is off. Empty allows any agent.",
 			def:     "(any)",
 			path:    []string{"herdr", "agent_kind"},
 		}, field[string]{
 			get: func(c *home.Config) string { return c.Herdr.AgentKind },
 			set: func(c *home.Config, v string) { c.Herdr.AgentKind = v },
 		}, "(any)", "Agent kind filter cleared (any agent allowed)"),
+		boolSetting(settingMeta{
+			id:      "herdr.prefer_active_agent",
+			section: "CODING AGENT (HERDR)",
+			title:   "Prefer active agent on PR",
+			detail:  "Use any agent already working on the pull request before filtering by agent kind. When off, only agents matching the agent kind filter are used.",
+			def:     "on",
+			path:    []string{"herdr", "prefer_active_agent"},
+		}, field[bool]{
+			get: func(c *home.Config) bool { return c.Herdr.PreferActiveAgent },
+			set: func(c *home.Config, v bool) { c.Herdr.PreferActiveAgent = v },
+		}),
 		stringSetting(settingMeta{
 			id:      "herdr.skill",
 			section: "CODING AGENT (HERDR)",

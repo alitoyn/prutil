@@ -371,3 +371,20 @@ func TestTheListIntervalFallsBackToTheKeysItReplaced(t *testing.T) {
 		})
 	}
 }
+
+func TestPreferActiveAgentDefaultsToTrueAndCanBeTurnedOff(t *testing.T) {
+	assert.True(t, home.DefaultConfig().Herdr.PreferActiveAgent)
+
+	unmentioned, err := home.ParseConfig([]byte("herdr:\n  agent_kind: opencode\n"))
+	require.NoError(t, err)
+	assert.True(t, unmentioned.Herdr.PreferActiveAgent,
+		"a configuration that does not mention prefer_active_agent keeps it on")
+
+	disabled, err := home.ParseConfig([]byte("herdr:\n  agent_kind: opencode\n  prefer_active_agent: false\n"))
+	require.NoError(t, err)
+	assert.False(t, disabled.Herdr.PreferActiveAgent)
+}
+
+func TestTheWrittenTemplateNamesPreferActiveAgent(t *testing.T) {
+	assert.Contains(t, string(home.DefaultConfigTemplate()), "prefer_active_agent: true")
+}

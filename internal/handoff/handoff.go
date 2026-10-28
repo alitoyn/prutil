@@ -955,7 +955,7 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 		if agent.PaneID != "" && agent.PaneID == d.selfPane {
 			continue
 		}
-		if d.cfg.AgentKind != "" && agent.Kind != d.cfg.AgentKind {
+		if !d.cfg.PreferActiveAgent && d.cfg.AgentKind != "" && agent.Kind != d.cfg.AgentKind {
 			continue
 		}
 		checkout := d.git.Identify(ctx, agent.Dir())
@@ -1003,6 +1003,13 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 	sort.SliceStable(found, func(i, j int) bool {
 		if found[i].score != found[j].score {
 			return found[i].score > found[j].score
+		}
+		if d.cfg.AgentKind != "" {
+			iPref := found[i].agent.Kind == d.cfg.AgentKind
+			jPref := found[j].agent.Kind == d.cfg.AgentKind
+			if iPref != jPref {
+				return iPref
+			}
 		}
 		return found[i].agent.PaneID < found[j].agent.PaneID
 	})

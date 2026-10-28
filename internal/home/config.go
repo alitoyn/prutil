@@ -198,9 +198,16 @@ type DiscoveryConfig struct {
 
 // HerdrConfig governs what prutil says to a coding agent, and to which one.
 type HerdrConfig struct {
-	// AgentKind restricts handoffs to one kind of agent, such as "claude" or
-	// "copilot". Empty means any agent herdr recognises will do.
+	// AgentKind names the kind of agent prutil starts when provisioning a
+	// workspace, such as "claude" or "opencode", and restricts handoffs to that
+	// kind when PreferActiveAgent is false (or breaks ties when it is true).
+	// Empty means any agent herdr recognises will do.
 	AgentKind string `yaml:"agent_kind"`
+	// PreferActiveAgent uses any agent already working on the pull request
+	// before filtering by AgentKind. When true (the default), AgentKind is the
+	// default harness to start when provisioning and a tie-breaker when
+	// multiple agents match at the same tier and readiness.
+	PreferActiveAgent bool `yaml:"prefer_active_agent"`
 	// Fallback governs the action taken when no active agent matches the
 	// pull request's head branch ("new", "none", or "repo").
 	Fallback FallbackStrategy `yaml:"fallback"`
@@ -311,11 +318,12 @@ func (w WatchConfig) ReviewFilter() model.ReviewFilter {
 func DefaultConfig() Config {
 	return Config{
 		Herdr: HerdrConfig{
-			Fallback:    FallbackNew,
-			Prompt:      DefaultPrompt,
-			CheckPrompt: DefaultCheckPrompt,
-			WaitForIdle: Duration(15 * time.Minute),
-			Toast:       true,
+			PreferActiveAgent: true,
+			Fallback:          FallbackNew,
+			Prompt:            DefaultPrompt,
+			CheckPrompt:       DefaultCheckPrompt,
+			WaitForIdle:       Duration(15 * time.Minute),
+			Toast:             true,
 		},
 		Watch: WatchConfig{
 			ActiveInterval:      Duration(30 * time.Second),

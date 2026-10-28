@@ -489,8 +489,9 @@ the viewer is known, which `loadOpen` asks `Client.Viewer` for while it is not.
 `internal/sandbox` holds one `Profile` per kind of agent. `Launch` returns
 the agent's arguments with what can be established before it starts; `Inspect`
 checks one already running. Claude Code has a vendor status command. Copilot
-CLI and agy have profiles that check their launch flags and user-owned settings
-instead; a missing or permissive policy is not counted as contained.
+CLI checks its launch flags and requires an explicit restrictive user-owned
+settings policy; agy runs inside its built-in terminal sandbox by default unless
+`--dangerously-skip-permissions` or a permissive user settings file disables it.
 `docs/security/prompt-injection.md` records what was verified for each vendor
 and what still needs live probes.
 

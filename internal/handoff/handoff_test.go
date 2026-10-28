@@ -483,7 +483,46 @@ func TestPrutilNeverHandsWorkToTheTerminalItIsRunningIn(t *testing.T) {
 	assert.Empty(t, control.prompted)
 }
 
-func TestOnlyTheConfiguredKindOfAgentIsConsidered(t *testing.T) {
+func TestAnActiveAgentOnThePullRequestIsUsedRegardlessOfConfiguredKindByDefault(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "agy", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
+	}}
+	checkouts := fakeGit{"/work/retry": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "opencode"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, home.OutcomeSent, res.Outcome)
+	assert.Equal(t, "w2:p1", res.Target)
+	assert.Equal(t, "agy", res.Kind)
+	assert.Equal(t, []string{"w2:p1"}, control.prompted)
+}
+
+func TestTheConfiguredKindBreaksATieBetweenEquallyMatchedActiveAgents(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "agy", Status: herdr.StatusIdle, CWD: "/work/retry-a", PaneID: "w1:p1"},
+		{Kind: "opencode", Status: herdr.StatusIdle, CWD: "/work/retry-b", PaneID: "w2:p1"},
+	}}
+	checkouts := fakeGit{
+		"/work/retry-a": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"},
+		"/work/retry-b": {Repo: "relloyd/prutil", Branch: "feat/uploader-retry"},
+	}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "opencode"
+	})
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, "w2:p1", res.Target, "opencode wins the tie even though agy has an earlier pane ID")
+	assert.Equal(t, "opencode", res.Kind)
+	assert.Equal(t, []string{"w2:p1"}, control.prompted)
+}
+
+func TestOnlyTheConfiguredKindOfAgentIsConsideredWhenPreferActiveAgentIsOff(t *testing.T) {
 	control := &fakeHerdr{agents: []herdr.Agent{
 		{Kind: "codex", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
 	}}
@@ -491,6 +530,7 @@ func TestOnlyTheConfiguredKindOfAgentIsConsidered(t *testing.T) {
 
 	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
 		cfg.Herdr.AgentKind = "claude"
+		cfg.Herdr.PreferActiveAgent = false
 	})
 	_, err := dispatcher.Dispatch(context.Background(), request())
 
