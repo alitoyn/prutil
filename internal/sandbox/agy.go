@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // agy runs terminal commands inside its built-in Standard Sandbox Mode by
@@ -14,8 +15,9 @@ import (
 // (verified on agy 1.2.11 / 1.4.9; agyInspect does not check the binary
 // version, so re-probe on version bumps). A session is contained unless it was
 // launched with --dangerously-skip-permissions or the reader's settings.json
-// disables the terminal sandbox or sets a toolPermission that bypasses sandbox
-// approval.
+// disables the terminal sandbox, sets a toolPermission that bypasses sandbox
+// approval, or grants a wildcard unsandboxed or URL tool rule in
+// permissions.allow.
 func agy() Profile {
 	return Profile{Kind: "agy", Bin: "agy", Launch: agyLaunch, Inspect: agyInspect}
 }
@@ -41,6 +43,9 @@ func agyPosture(env Env, argv []string) (Posture, error) {
 	var settings struct {
 		EnableTerminalSandbox *bool  `json:"enableTerminalSandbox"`
 		ToolPermission        string `json:"toolPermission"`
+		Permissions           struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
 	}
 	path := filepath.Join(env.Home, ".gemini", "antigravity-cli", "settings.json")
 	if err := readVendorSettings(path, &settings); err != nil {
@@ -55,5 +60,29 @@ func agyPosture(env Env, argv []string) (Posture, error) {
 	if settings.ToolPermission != "" && settings.ToolPermission != "ask" && settings.ToolPermission != "proceed-in-sandbox" {
 		return Posture{Known: true, Detail: "agy tool permission bypasses sandbox approval"}, nil
 	}
+	for _, rule := range settings.Permissions.Allow {
+		rule = strings.TrimSpace(rule)
+		if isWildcardUnsandboxed(rule) ||
+			(strings.HasPrefix(rule, "read_url(") || strings.HasPrefix(rule, "execute_url(")) &&
+				strings.Contains(rule, "*") {
+			return Posture{Known: true, Detail: "agy policy permits an unrestricted tool"}, nil
+		}
+	}
 	return Posture{Known: true, Contained: true, Detail: "agy built-in terminal sandbox"}, nil
+}
+
+func isWildcardUnsandboxed(rule string) bool {
+	if rule == "unsandboxed" {
+		return true
+	}
+	inner, ok := strings.CutPrefix(rule, "unsandboxed(")
+	if !ok {
+		return false
+	}
+	inner, ok = strings.CutSuffix(inner, ")")
+	if !ok {
+		return false
+	}
+	inner = strings.TrimSpace(inner)
+	return inner == "" || inner == "*"
 }

@@ -142,6 +142,18 @@ func TestAgyInspectRejectsAnUncontainedCommandOrPolicy(t *testing.T) {
 		{"a policy with a tool permission that bypasses sandbox approval", []string{"agy"}, func(doc map[string]any) {
 			doc["toolPermission"] = "proceed-always"
 		}},
+		{"a policy that allows reading any URL", []string{"agy"}, func(doc map[string]any) {
+			doc["permissions"] = map[string]any{"allow": []string{"read_url(*)"}}
+		}},
+		{"a policy that allows executing any URL", []string{"agy"}, func(doc map[string]any) {
+			doc["permissions"] = map[string]any{"allow": []string{"execute_url(*)"}}
+		}},
+		{"a policy that allows unsandboxed commands by wildcard", []string{"agy"}, func(doc map[string]any) {
+			doc["permissions"] = map[string]any{"allow": []string{"unsandboxed(*)"}}
+		}},
+		{"a policy that allows bare unsandboxed commands", []string{"agy"}, func(doc map[string]any) {
+			doc["permissions"] = map[string]any{"allow": []string{"unsandboxed"}}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, env := newSandbox(t, &fakeClaude{})

@@ -617,16 +617,23 @@ boundary blocking built-in file tools from modifying
 checks argv, rejecting `--dangerously-skip-permissions`. Both read
 `~/.gemini/antigravity-cli/settings.json` when it exists without changing it.
 Containment holds by default when the file is absent, and is rejected when
-`enableTerminalSandbox` is explicitly `false` or when `toolPermission` is set to
-a value other than `""` (unset), `"ask"`, or `"proceed-in-sandbox"`. Individual
-`permissions.allow` rules in `settings.json` are not rejected because `agy`'s
-built-in sandbox blocks all network access and readers must approve specific
-commands (such as `gh` or `git`) to run unsandboxed for `agy` to function.
-`Strict` stays false because a person may approve a bypass. There is no
-launch-time settings flag or vendor status command in 1.2.11 / 1.4.9, and
-`Inspect` does not check the running `agy` version; bumping the verified `agy`
-version requires re-probing that the built-in terminal sandbox remains on by
-default and that `settings.json` remains protected when the file is absent.
+`enableTerminalSandbox` is explicitly `false`, when `toolPermission` is set to
+a value other than `""` (unset), `"ask"`, or `"proceed-in-sandbox"`, or when
+`permissions.allow` includes a wildcard `unsandboxed` (`unsandboxed` or
+`unsandboxed(*)`) or wildcard URL tool (`read_url(*)` / `execute_url(*)`, which
+govern built-in URL fetch tools outside the terminal sandbox) rule.
+Command-specific `unsandboxed(<cmd>)` entries are accepted because `agy`'s
+built-in terminal sandbox blocks all network access with no domain proxy and
+readers must allow commands such as `gh` or `git` to run unsandboxed for `agy`
+to function. Because an allowed prefix such as `unsandboxed(gh)` can still be
+invoked by the agent with attacker-chosen arguments, readers should scope
+`unsandboxed(...)` rules to the narrowest subcommands practical, and `Strict`
+stays false because both user-scoped rules and interactive prompts permit
+sandbox bypasses. There is no launch-time settings flag or vendor status
+command in 1.2.11 / 1.4.9, and `Inspect` does not check the running `agy`
+version; bumping the verified `agy` version requires re-probing that the
+built-in terminal sandbox remains on by default and that `settings.json`
+remains protected when the file is absent.
 
 ### 2c. Automatic handoffs go only to contained agents (built)
 
