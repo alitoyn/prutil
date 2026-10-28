@@ -826,9 +826,8 @@ paths to `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/herdr` and
 **For agy**, commands run inside its built-in terminal sandbox by default, so a
 normal `agy` session is accepted as contained unless `--dangerously-skip-permissions`
 was passed or `~/.gemini/antigravity-cli/settings.json` sets
-`enableTerminalSandbox: false`, sets `toolPermission` to a value other than `""`
-(unset), `"ask"`, or `"proceed-in-sandbox"`, or includes `unsandboxed` or
-wildcard URL rules in `permissions.allow`.
+`enableTerminalSandbox: false` or sets `toolPermission` to a value other than
+`""` (unset), `"ask"`, or `"proceed-in-sandbox"`.
 
 These checks
 are **not proof of OS isolation**: a live agent must still verify secret

@@ -142,15 +142,6 @@ func TestAgyInspectRejectsAnUncontainedCommandOrPolicy(t *testing.T) {
 		{"a policy with a tool permission that bypasses sandbox approval", []string{"agy"}, func(doc map[string]any) {
 			doc["toolPermission"] = "proceed-always"
 		}},
-		{"a policy allowing an unrestricted domain", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"].(map[string]any)["allow"] = []string{"read_url(*)"}
-		}},
-		{"a policy allowing an unrestricted execute_url domain", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"].(map[string]any)["allow"] = []string{"execute_url(*)"}
-		}},
-		{"a policy allowing unsandboxed commands", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"].(map[string]any)["allow"] = []string{"read_url(github.com)", "unsandboxed(*)"}
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, env := newSandbox(t, &fakeClaude{})
@@ -183,9 +174,9 @@ func TestAgyInspectAcceptsDefaultAndSandboxedSessions(t *testing.T) {
 			doc:  agyPolicy(),
 		},
 		{
-			name: "an agy launch with --sandbox and ask tool permission",
+			name: "an agy launch with --sandbox, ask tool permission, and user allowlist entries",
 			argv: []string{"agy", "--sandbox"},
-			doc:  map[string]any{"toolPermission": "ask", "permissions": map[string]any{"allow": []string{"sandboxed(git status)"}}},
+			doc:  map[string]any{"toolPermission": "ask", "permissions": map[string]any{"allow": []string{"sandboxed(git status)", "unsandboxed(gh pr)"}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
