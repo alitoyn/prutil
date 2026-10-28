@@ -1691,6 +1691,26 @@ func TestAKindWithNoProfileIsNotHeldToTheRequirement(t *testing.T) {
 	assert.Empty(t, box.inspected)
 }
 
+func TestAnAutomaticHandoffDoesNotCrossToAnUnprofiledAgentKind(t *testing.T) {
+	control, checkouts := onTheBranch("codex", "codex")
+	box := claudeBox(strict)
+	dispatcher := dispatcherWithSandbox(t, control, checkouts, box, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+		cfg.Herdr.PreferActiveAgent = true
+	})
+
+	res, err := dispatcher.Dispatch(context.Background(), request())
+	require.ErrorIs(t, err, handoff.ErrUncontained, "an automatic handoff with agent_kind set does not cross to an unprofiled kind")
+	assert.Contains(t, res.Detail, "codex has no sandbox profile")
+	assert.Empty(t, control.created, "and does not start a second agent beside it")
+
+	req := request()
+	req.Manual = true
+	_, err = dispatcher.Dispatch(context.Background(), req)
+	require.NoError(t, err, "a manual handoff still reaches the active agent on the PR")
+	assert.Equal(t, []string{"w3:p1"}, control.prompted)
+}
+
 func TestASettingSavedWhilePrutilRunsDecidesTheNextHandoff(t *testing.T) {
 	// The settings pane saves require_sandbox off. Before Configure, the
 	// dispatcher went on with the value it started with until a restart.

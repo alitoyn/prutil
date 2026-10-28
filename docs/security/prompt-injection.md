@@ -607,17 +607,18 @@ deny a file *read* by path in 1.0.88, so the earlier plan to add those flags
 was not implementable. Domain-limited outbound network is likewise not an
 OS sandbox setting in this release; the profile cannot claim that guarantee.
 
-**Antigravity CLI (profile built, live probes pending).** `agy` runs terminal
-commands inside its built-in Standard Sandbox Mode (`BypassSandbox: false`) by
-default on normal launches, confining filesystem access outside the workspace
-and blocking network access unless the reader approves an unsandboxed command,
-and enforces a hardcoded system protection boundary on
+**Antigravity CLI (profile built, default terminal sandbox and settings protection verified).**
+`agy` runs terminal commands inside its built-in Standard Sandbox Mode
+(`BypassSandbox: false`) by default on normal launches, confining filesystem
+access outside the workspace and blocking network access unless the reader
+approves an unsandboxed command, and enforces a hardcoded system protection
+boundary blocking built-in file tools from modifying
 `~/.gemini/antigravity-cli/settings.json`. Launch passes `--sandbox`; Inspect
 checks argv, rejecting `--dangerously-skip-permissions`. Both read
 `~/.gemini/antigravity-cli/settings.json` when it exists without changing it.
 Containment holds by default when the file is absent, and is rejected when
 `enableTerminalSandbox` is explicitly `false`, when `toolPermission` is set to
-a value other than `""`, `"ask"`, or `"proceed-in-sandbox"`, or when
+a value other than `""` (unset), `"ask"`, or `"proceed-in-sandbox"`, or when
 `permissions.allow` includes an `unsandboxed` or wildcard URL rule
 (`read_url(*)`, `execute_url(*)`). `Strict` stays false because a person may
 approve a bypass. There is no launch-time settings flag or vendor status

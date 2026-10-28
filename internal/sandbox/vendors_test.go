@@ -119,7 +119,7 @@ func TestAgyLaunchUsesTheBuiltInTerminalSandboxByDefault(t *testing.T) {
 	path := filepath.Join(env.Home, ".gemini", "antigravity-cli", "settings.json")
 	l, err := s.Launch(context.Background(), "agy", target(t.TempDir()))
 	require.NoError(t, err)
-	assert.Empty(t, l.Args)
+	assert.Equal(t, []string{"--sandbox"}, l.Args)
 	assert.True(t, l.Posture.Contained, "agy runs inside its built-in terminal sandbox by default")
 	assert.False(t, l.Posture.Strict, "a person can approve an unsandboxed command")
 

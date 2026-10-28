@@ -20,7 +20,7 @@ func agy() Profile {
 }
 
 func agyLaunch(_ context.Context, env Env, _ Runner, _ Target) (Launch, error) {
-	var args []string
+	args := []string{"--sandbox"}
 	p, err := agyPosture(env, args)
 	if err != nil {
 		return Launch{}, err

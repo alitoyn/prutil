@@ -971,10 +971,17 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 			passed = append(passed, c)
 			continue
 		}
-		if automatic && d.security.RequireSandbox && d.sandbox != nil && d.sandbox.Supports(agent.Kind) {
-			p := d.posture(ctx, agent)
-			c.posture = &p
-			if !p.Contained {
+		if automatic && d.security.RequireSandbox && d.sandbox != nil {
+			if d.sandbox.Supports(agent.Kind) {
+				p := d.posture(ctx, agent)
+				c.posture = &p
+				if !p.Contained {
+					uncontained = append(uncontained, c)
+					continue
+				}
+			} else if d.cfg.AgentKind != "" && agent.Kind != d.cfg.AgentKind {
+				p := sandbox.Posture{Known: true, Detail: agent.Kind + " has no sandbox profile"}
+				c.posture = &p
 				uncontained = append(uncontained, c)
 				continue
 			}
