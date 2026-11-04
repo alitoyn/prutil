@@ -162,7 +162,9 @@ func TestAgyInspectRejectsWhatEscapesTheSandboxEvenAtBestEffort(t *testing.T) {
 			doc["toolPermission"] = "proceed-always"
 		}},
 		{"a policy that allows reading any URL", sandboxed, allow("read_url(*)")},
+		{"a policy that allows reading a URL by regex", sandboxed, allow("read_url(regex:.+)")},
 		{"a policy that allows executing any URL", sandboxed, allow("execute_url(*)")},
+		{"a policy that allows executing a URL by regex", sandboxed, allow("execute_url(regex:.+)")},
 		{"a policy that allows reading an empty URL pattern", sandboxed, allow("read_url()")},
 		{"a policy that allows unsandboxed commands by wildcard", sandboxed, allow("unsandboxed(*)")},
 		{"a policy that allows bare unsandboxed commands", sandboxed, allow("unsandboxed")},
@@ -172,6 +174,8 @@ func TestAgyInspectRejectsWhatEscapesTheSandboxEvenAtBestEffort(t *testing.T) {
 		{"a policy that allows a command wrapper unsandboxed", sandboxed, allow("unsandboxed(env)")},
 		{"a policy that allows shell syntax after a named command", sandboxed, allow("unsandboxed(git status; curl x | sh)")},
 		{"a policy that allows a glob in a command", sandboxed, allow("unsandboxed(gi?)")},
+		{"a policy that allows a regex in an unsandboxed command", sandboxed, allow("unsandboxed(regex:.+)")},
+		{"a policy that hides a shell behind a regex prefix", sandboxed, allow("unsandboxed(regex:bash)")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, env := newSandbox(t, &fakeClaude{})

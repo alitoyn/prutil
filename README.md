@@ -840,8 +840,8 @@ paths to `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/herdr` and
   `~/.gemini/antigravity-cli/settings.json` set `enableTerminalSandbox: true`,
   `toolPermission: "proceed-in-sandbox"`, and restricted `read_url(domain)`
   entries in `permissions.allow`, with no `unsandboxed` rule of any kind and no
-  wildcard URL rule. With a missing or looser policy, automatic handoffs to agy
-  are refused.
+  wildcard or `regex:` URL rule. With a missing or looser policy, automatic
+  handoffs to agy are refused.
 - *Best effort, opt-in.* agy's built-in terminal sandbox has no network and no
   domain proxy, so agy cannot push or reply on a thread without an
   `unsandboxed(...)` rule for git or gh, which the first level forbids. Set
@@ -849,11 +849,11 @@ paths to `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/herdr` and
   the `s` pane) to accept agy on its built-in sandbox alone. prutil still
   requires `--sandbox` on the command line, and still refuses
   `--dangerously-skip-permissions`, `enableTerminalSandbox: false`, a
-  `toolPermission` other than unset, `"ask"` or `"proceed-in-sandbox"`, wildcard
-  or empty `read_url` / `execute_url` rules, and any `unsandboxed(...)` rule
-  that is bare, empty, holds a glob or shell syntax, or names a shell, an
-  interpreter or a command wrapper (`bash`, `python`, `node`, `env`, `xargs`,
-  `sudo` and the like).
+  `toolPermission` other than unset, `"ask"` or `"proceed-in-sandbox"`,
+  wildcard, `regex:` or empty `read_url` / `execute_url` rules, and any
+  `unsandboxed(...)` rule that is bare, empty, holds a glob, a `regex:` pattern
+  or shell syntax, or names a shell, an interpreter or a command wrapper
+  (`bash`, `python`, `node`, `env`, `xargs`, `sudo` and the like).
 
   **This is not a sandbox you can rely on.** An `unsandboxed(git)` or
   `unsandboxed(gh)` rule still lets the agent run any command outside the
@@ -870,8 +870,17 @@ These checks
 are **not proof of OS isolation**: a live agent must still verify secret
 reads, network access, and herdr socket denial on your machine.
 
-The WATCH history says what each handoff went to, for example
-`claude w3:p1 · sandboxed, strict`. A sandboxed Claude agent's push goes over
+The WATCH history and `handoffs.jsonl` record what each handoff went to, for
+example `claude w3:p1 · sandboxed, strict`:
+
+| Posture | What establishes it | Automatic handoff (`require_sandbox: true`) |
+| --- | --- | --- |
+| `sandboxed, strict` | Claude with `allowUnsandboxedCommands: false` confirmed by `claude sandbox status`; Copilot with `--experimental --sandbox`, `allowBypass: false`, `allowLocalNetwork: false`, and secret paths in `deniedPaths` | accepted |
+| `sandboxed` | Claude with its sandbox on (`allowUnsandboxedCommands` not false); agy with `--sandbox`, `enableTerminalSandbox: true`, `toolPermission: "proceed-in-sandbox"`, restricted `read_url(domain)` rules, and no `unsandboxed` rules | accepted |
+| `best-effort sandbox` | agy with `--sandbox` and its built-in terminal sandbox not disabled, with no shell, interpreter, wrapper, glob or `regex:` in `unsandboxed(...)` | accepted only when `security.allow_unsafe_agy: true` |
+| `not sandboxed` / `sandbox unknown` | A profiled agent whose flags or settings fail the checks above, or whose command line could not be read | refused (`W` and `F` can still use it) |
+
+A sandboxed Claude agent's push goes over
 HTTPS through the sandbox's proxy; that has been checked with a real handoff,
 from finding the clone to the agent's reply on the thread. If a push fails for
 you, set `require_sandbox: false` and say what the agent reported.

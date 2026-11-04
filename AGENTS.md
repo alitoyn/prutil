@@ -543,7 +543,8 @@ The rules, again each one a thing that looks like a tidy-up and is not:
   Copilot: the profile has no config, the posture cache is shared, and the
   WATCH history must say `best-effort sandbox` rather than `sandboxed`. Even
   the best-effort reading requires `--sandbox` on the command line and refuses
-  any `unsandboxed(...)` rule naming a shell, an interpreter or a wrapper.
+  any `unsandboxed(...)` rule holding a glob or `regex:` pattern or naming a
+  shell, an interpreter or a wrapper.
 - **A prompt line may not begin with `!`.** Claude Code runs it as a shell
   command without the model, and outside the sandbox. `herdr.Client.Prompt`
   refuses one, whichever vendor the prompt is for.

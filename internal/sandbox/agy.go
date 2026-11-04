@@ -23,9 +23,9 @@ import (
 // sandbox by default (verified on 1.2.11 / 1.4.9), so a missing file passes,
 // and so do unsandboxed rules for named commands, which agy needs to reach the
 // network at all. A rule naming a shell, an interpreter or a command wrapper,
-// or any glob, still fails, because it lets the agent run anything outside the
-// sandbox. Those that pass are not safe either: git and gh can both run an
-// arbitrary command. That is what the opt-in accepts.
+// or any glob or regular expression, still fails, because it lets the agent
+// run anything outside the sandbox. Those that pass are not safe either: git
+// and gh can both run an arbitrary command. That is what the opt-in accepts.
 func agy() Profile {
 	return Profile{Kind: "agy", Bin: "agy", Launch: agyLaunch, Inspect: agyInspect}
 }
@@ -119,7 +119,7 @@ func agyBestEffort(s agySettings) string {
 			continue
 		}
 		for _, tool := range []string{"read_url", "execute_url"} {
-			if inner, ok := ruleArgument(rule, tool); ok && (inner == "" || hasGlob(inner)) {
+			if inner, ok := ruleArgument(rule, tool); ok && (inner == "" || hasGlob(inner) || hasRegex(inner)) {
 				return "agy policy allows " + rule + " (any URL)"
 			}
 		}
@@ -173,6 +173,10 @@ func hasGlob(s string) bool {
 	return strings.ContainsAny(s, "*?[")
 }
 
+func hasRegex(s string) bool {
+	return strings.HasPrefix(strings.ToLower(s), "regex:")
+}
+
 // escapeCommands run whatever they are given, so allowing one unsandboxed
 // allows every command unsandboxed.
 var escapeCommands = map[string]bool{
@@ -192,6 +196,9 @@ var escapeCommands = map[string]bool{
 func unsandboxedEscape(inner string) string {
 	if inner == "" {
 		return "no command named"
+	}
+	if hasRegex(inner) {
+		return "a regular expression"
 	}
 	if hasGlob(inner) {
 		return "a glob"

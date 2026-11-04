@@ -534,7 +534,15 @@ A `sandbox.Profile` has two hooks:
   arguments with the posture the vendor says they give.
 - `Inspect` asks about an agent that is already running.
 
-A kind with no `Launch` is started as it always was.
+A kind with no `Launch` is started as it always was. For profiled kinds,
+`Posture` maps the vendor's configuration onto four levels:
+
+| Posture (`Posture.String()`) | `Contained` | `Strict` | `BestEffort` | How each vendor reaches it | Automatic handoff (`require_sandbox: true`) |
+| --- | --- | --- | --- | --- | --- |
+| `sandboxed, strict` | true | true | false | **Claude:** `claude sandbox status` reports `enabled` and `strictMode` (`allowUnsandboxedCommands: false`, local domain proxy, Seatbelt read/write/socket rules). **Copilot:** `--experimental --sandbox` in argv and `settings.json` has `allowBypass: false`, `allowLocalNetwork: false`, and secret paths in `deniedPaths`. | accepted |
+| `sandboxed` | true | false | false | **Claude:** `claude sandbox status` reports `enabled` with `strictMode: false`. **agy:** `--sandbox` in argv, `enableTerminalSandbox: true`, `toolPermission: "proceed-in-sandbox"`, at least one restricted `read_url(domain)` rule, no wildcard or `regex:` URL rules, and no `unsandboxed` rules. | accepted |
+| `best-effort sandbox` | false | false | true | **agy:** `--sandbox` in argv, `enableTerminalSandbox` not false, `toolPermission` unset/`"ask"`/`"proceed-in-sandbox"`, no wildcard or `regex:` URL rules, and any `unsandboxed(...)` rules limited to named commands (no shells, interpreters, wrappers, globs, `regex:` patterns or shell syntax). | accepted only when `security.allow_unsafe_agy: true` |
+| `not sandboxed` / `sandbox unknown` | false | false | false | Any profiled agent whose flags or settings fail the checks above, or whose command line could not be read. | refused (`W` and `F` can still use it) |
 
 **Claude Code (built).** The profile keeps two files beneath the application
 directory:
@@ -643,9 +651,11 @@ What the best-effort reading still refuses:
   so a negated form cannot read as the one prutil asked for;
 - `enableTerminalSandbox: false` (left out, or `null`, keeps agy's default);
 - a `toolPermission` other than unset, `"ask"` or `"proceed-in-sandbox"`;
-- a `read_url` or `execute_url` rule that is empty or holds a glob;
-- an `unsandboxed` rule that is bare or empty, holds a glob or shell syntax
-  (``; & | $ ` < >``), or whose first word is a shell, an interpreter or a
+- a `read_url` or `execute_url` rule that is empty or holds a glob or a
+  `regex:` pattern;
+- an `unsandboxed` rule that is bare or empty, holds a glob, a `regex:`
+  pattern or shell syntax (``; & | $ ` < >``), or whose first word is a shell,
+  an interpreter or a
   command wrapper: `sh`, `bash`, `zsh`, `python`, `node`, `perl`, `ruby`, `env`,
   `xargs`, `sudo`, `find`, `awk`, `make`, `npx` and the rest of
   `escapeCommands` in `internal/sandbox/agy.go`. The first word is compared by
