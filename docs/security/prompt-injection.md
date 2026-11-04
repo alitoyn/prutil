@@ -654,6 +654,13 @@ one branch. The watcher reports it instead, naming the agent and `W` as the
 override. `W` and `F` can use the agent, because the reader chose it
 (`Request.Manual`).
 
+`herdr.prefer_active_agent` lets an agent of a kind other than
+`herdr.agent_kind` take the work when it is on the pull request. It is off by
+default. When it is on and the requirement is too, an agent of another kind
+with no profile is treated as not contained rather than exempt: the exemption
+for unprofiled kinds exists so that a reader who named such a kind is not
+stopped dead, and does not extend to a kind the reader never named.
+
 When the requirement is on, provisioning also refuses a launch that Claude says
 does not sandbox the agent.
 

@@ -294,6 +294,18 @@ agent in the repository. Keep the repo fallback in its own list inside `pick`:
 scored alongside the rest, being ready for input would put an agent on other
 work above one that is on the pull request.
 
+`herdr.agent_kind` filters every candidate unless `herdr.prefer_active_agent`
+is on, and then lets in another kind only when git puts that agent on the pull
+request. The repo fallback keeps to the kind either way: an agent of a kind the
+reader did not name, busy with other work, is the last thing the flag was meant
+to reach. `prefer_active_agent` is off by default because `config.yaml` is never
+rewritten, and an installation that set `agent_kind` to restrict handoffs must
+not lose that restriction by upgrading. Under `security.require_sandbox`, a
+cross-kind agent with no sandbox profile goes to `uncontained`, not to `found`:
+it is on the branch, so `fallback: new` must not start another beside it.
+`uncontainedAgents` says per agent whether it is on the pull request or only in
+the repository, because `fallback: repo` puts the second sort there too.
+
 Only an agent prutil has just started is prompted twice. herdr's status lags a
 prompt that did arrive, so re-sending to an agent that was already running
 delivers the same feedback again; and `done` is a resting state like `idle`, so

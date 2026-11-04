@@ -483,7 +483,7 @@ func TestPrutilNeverHandsWorkToTheTerminalItIsRunningIn(t *testing.T) {
 	assert.Empty(t, control.prompted)
 }
 
-func TestAnActiveAgentOnThePullRequestIsUsedRegardlessOfConfiguredKindByDefault(t *testing.T) {
+func TestPreferActiveAgentUsesAnAgentOfAnotherKindOnThePullRequest(t *testing.T) {
 	control := &fakeHerdr{agents: []herdr.Agent{
 		{Kind: "agy", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
 	}}
@@ -491,6 +491,7 @@ func TestAnActiveAgentOnThePullRequestIsUsedRegardlessOfConfiguredKindByDefault(
 
 	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
 		cfg.Herdr.AgentKind = "opencode"
+		cfg.Herdr.PreferActiveAgent = true
 	})
 	res, err := dispatcher.Dispatch(context.Background(), request())
 
@@ -513,6 +514,7 @@ func TestTheConfiguredKindBreaksATieBetweenEquallyMatchedActiveAgents(t *testing
 
 	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
 		cfg.Herdr.AgentKind = "opencode"
+		cfg.Herdr.PreferActiveAgent = true
 	})
 	res, err := dispatcher.Dispatch(context.Background(), request())
 
@@ -522,7 +524,7 @@ func TestTheConfiguredKindBreaksATieBetweenEquallyMatchedActiveAgents(t *testing
 	assert.Equal(t, []string{"w2:p1"}, control.prompted)
 }
 
-func TestOnlyTheConfiguredKindOfAgentIsConsideredWhenPreferActiveAgentIsOff(t *testing.T) {
+func TestOnlyTheConfiguredKindOfAgentIsConsideredByDefault(t *testing.T) {
 	control := &fakeHerdr{agents: []herdr.Agent{
 		{Kind: "codex", Status: herdr.StatusIdle, CWD: "/work/retry", PaneID: "w2:p1"},
 	}}
@@ -530,11 +532,29 @@ func TestOnlyTheConfiguredKindOfAgentIsConsideredWhenPreferActiveAgentIsOff(t *t
 
 	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
 		cfg.Herdr.AgentKind = "claude"
-		cfg.Herdr.PreferActiveAgent = false
 	})
 	_, err := dispatcher.Dispatch(context.Background(), request())
 
-	require.ErrorIs(t, err, handoff.ErrNoAgent)
+	require.ErrorIs(t, err, handoff.ErrNoAgent, "an installation that set agent_kind keeps its restriction")
+	assert.Empty(t, control.prompted)
+}
+
+func TestTheRepoFallbackKeepsToTheConfiguredKindWhenPreferActiveAgentIsOn(t *testing.T) {
+	control := &fakeHerdr{agents: []herdr.Agent{
+		{Kind: "codex", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w2:p1"},
+	}}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+
+	dispatcher, _ := dispatcherFor(t, control, checkouts, func(cfg *home.Config) {
+		cfg.Herdr.AgentKind = "claude"
+		cfg.Herdr.PreferActiveAgent = true
+		cfg.Herdr.Fallback = home.FallbackRepo
+	})
+	_, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.ErrorIs(t, err, handoff.ErrNoAgent,
+		"an agent of another kind on other work in the repository is not reached through the fallback")
+	assert.Empty(t, control.prompted)
 }
 
 func TestAnAgentInAnotherRepositoryIsNotACandidate(t *testing.T) {
@@ -1691,6 +1711,23 @@ func TestAKindWithNoProfileIsNotHeldToTheRequirement(t *testing.T) {
 	assert.Empty(t, box.inspected)
 }
 
+func TestAnUncontainedAgentOnlyInTheRepositoryIsNotSaidToBeOnThePullRequest(t *testing.T) {
+	control := &fakeHerdr{
+		agents:    []herdr.Agent{{Kind: "claude", Status: herdr.StatusIdle, CWD: "/work/main", PaneID: "w3:p1"}},
+		processes: map[string]herdr.Process{"w3:p1": {Argv: []string{"claude"}, CWD: "/work/main"}},
+	}
+	checkouts := fakeGit{"/work/main": {Repo: "relloyd/prutil", Branch: "main", Upstream: "refs/heads/main"}}
+	dispatcher := dispatcherWithSandbox(t, control, checkouts, claudeBox(strict), func(cfg *home.Config) {
+		cfg.Herdr.Fallback = home.FallbackRepo
+	})
+
+	res, err := dispatcher.Dispatch(context.Background(), request())
+
+	require.ErrorIs(t, err, handoff.ErrUncontained)
+	assert.Contains(t, res.Detail, "in relloyd/prutil but not on relloyd/prutil#42")
+	assert.NotContains(t, res.Detail, "(on relloyd/prutil#42")
+}
+
 func TestAnAutomaticHandoffDoesNotCrossToAnUnprofiledAgentKind(t *testing.T) {
 	control, checkouts := onTheBranch("codex", "codex")
 	box := claudeBox(strict)
@@ -1701,7 +1738,7 @@ func TestAnAutomaticHandoffDoesNotCrossToAnUnprofiledAgentKind(t *testing.T) {
 
 	res, err := dispatcher.Dispatch(context.Background(), request())
 	require.ErrorIs(t, err, handoff.ErrUncontained, "an automatic handoff with agent_kind set does not cross to an unprofiled kind")
-	assert.Contains(t, res.Detail, "codex has no sandbox profile")
+	assert.Contains(t, res.Detail, "on relloyd/prutil#42, codex has no sandbox profile")
 	assert.Empty(t, control.created, "and does not start a second agent beside it")
 
 	req := request()

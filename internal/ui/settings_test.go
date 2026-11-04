@@ -1008,18 +1008,18 @@ func TestPreferActiveAgentIsToggledFromTheSettingsPane(t *testing.T) {
 	openSettingsPane(t, app)
 	cursorOn(t, app, "herdr.prefer_active_agent")
 
-	require.True(t, app.homeCfg.Herdr.PreferActiveAgent, "on by default")
+	require.False(t, app.homeCfg.Herdr.PreferActiveAgent, "off by default")
 
 	send(t, app, press("space"))
 
-	assert.False(t, app.homeCfg.Herdr.PreferActiveAgent)
+	assert.True(t, app.homeCfg.Herdr.PreferActiveAgent)
 	configs := dispatcher.configurations()
 	require.NotEmpty(t, configs)
-	assert.False(t, configs[len(configs)-1].Herdr.PreferActiveAgent)
+	assert.True(t, configs[len(configs)-1].Herdr.PreferActiveAgent)
 
 	saved, err := home.OpenIn(app.store.Dir()).LoadOrCreateConfig()
 	require.NoError(t, err)
-	assert.False(t, saved.Herdr.PreferActiveAgent)
+	assert.True(t, saved.Herdr.PreferActiveAgent)
 }
 
 // settingIndex is where the setting with id sits in the pane, so that a test

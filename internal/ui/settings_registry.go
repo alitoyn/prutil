@@ -636,20 +636,20 @@ func allSettings() []settingDescriptor {
 		stringSetting(settingMeta{
 			id:      "herdr.agent_kind",
 			section: "CODING AGENT (HERDR)",
-			title:   "Agent kind filter",
-			detail:  "Default agent kind started when provisioning (such as 'claude' or 'opencode'), and the kind filter when 'Prefer active agent on PR' is off. Empty allows any agent.",
+			title:   "Agent kind",
+			detail:  "The kind of agent prutil starts (such as 'claude' or 'copilot'), and the only kind given work unless 'Prefer active agent on PR' is on. Empty allows any agent but starts none.",
 			def:     "(any)",
 			path:    []string{"herdr", "agent_kind"},
 		}, field[string]{
 			get: func(c *home.Config) string { return c.Herdr.AgentKind },
 			set: func(c *home.Config, v string) { c.Herdr.AgentKind = v },
-		}, "(any)", "Agent kind filter cleared (any agent allowed)"),
+		}, "(any)", "Agent kind cleared (any agent allowed)"),
 		boolSetting(settingMeta{
 			id:      "herdr.prefer_active_agent",
 			section: "CODING AGENT (HERDR)",
 			title:   "Prefer active agent on PR",
-			detail:  "Use any agent already working on the pull request before filtering by agent kind. When off, only agents matching the agent kind filter are used.",
-			def:     "on",
+			detail:  "Let an agent of another kind take the work when it is already on the pull request. Agent kind still decides what prutil starts and what the repo fallback reaches.",
+			def:     "off",
 			path:    []string{"herdr", "prefer_active_agent"},
 		}, field[bool]{
 			get: func(c *home.Config) bool { return c.Herdr.PreferActiveAgent },

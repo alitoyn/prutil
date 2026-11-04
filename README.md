@@ -549,14 +549,22 @@ agent qualifies when prutil set its workspace up for the pull request, when its
 branch tracks the pull request's head branch or has the same name, or when its
 checkout holds the pull request's latest commit. Branch names are never compared
 for a likeness: `fix/retry` and `feat/retry` are different work, and so are
-`main` and `chore/sync-main`. By default (`herdr.prefer_active_agent: true`), any
-running agent already working on the pull request qualifies regardless of
-`herdr.agent_kind`; when more than one agent qualifies, the stronger evidence
-wins, then the one ready for input, and then `herdr.agent_kind` breaks ties. Set
-`herdr.prefer_active_agent: false` to restrict handoffs strictly to agents of
-`herdr.agent_kind`. The prompt carries a warning only
-when there is something true to say: the checkout is behind the pull request, or
-holds its commits on a branch that will not reach it.
+`main` and `chore/sync-main`. When more than one agent qualifies, the stronger
+evidence wins, then the one ready for input, then an agent of `herdr.agent_kind`.
+The prompt carries a warning only when there is something true to say: the
+checkout is behind the pull request, or holds its commits on a branch that will
+not reach it.
+
+`herdr.agent_kind` restricts handoffs to one kind of agent. Turn
+`herdr.prefer_active_agent` on to let an agent of another kind take the work
+when it is already on the pull request, say a codex session you started on the
+branch yourself while `agent_kind` is `claude`. It reaches no further than
+that: the `repo` fallback below still keeps to `agent_kind`, and `agent_kind` is
+still what prutil starts. While `security.require_sandbox` is on, an agent of
+another kind that prutil has no sandbox profile for is passed over by the
+watcher, `F` and `N` as not sandboxed, and no second agent is started beside it;
+`W` can still use it. It is off by default, so turning it on is a decision to
+let the watcher hand work to kinds you did not name.
 
 What happens when no agent qualifies is `herdr.fallback`'s to decide:
 
@@ -654,8 +662,9 @@ optional, and these are the defaults:
 
 ```yaml
 herdr:
-  agent_kind: claude        # default agent kind started when provisioning a workspace
-  prefer_active_agent: true # use any active agent already on the PR regardless of agent_kind
+  agent_kind: claude        # required whenever prutil starts an agent
+  prefer_active_agent: false
+                            # let an agent of another kind already on the PR take it
   skill: pr-comment-triage  # the skill the default prompt invokes
   wait_for_idle: 15m        # how long to wait for a busy agent
   dry_run: false

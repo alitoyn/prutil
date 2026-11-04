@@ -198,15 +198,16 @@ type DiscoveryConfig struct {
 
 // HerdrConfig governs what prutil says to a coding agent, and to which one.
 type HerdrConfig struct {
-	// AgentKind names the kind of agent prutil starts when provisioning a
-	// workspace, such as "claude" or "opencode", and restricts handoffs to that
-	// kind when PreferActiveAgent is false (or breaks ties when it is true).
-	// Empty means any agent herdr recognises will do.
+	// AgentKind restricts handoffs to one kind of agent, such as "claude" or
+	// "copilot", and is the kind prutil starts when it provisions a workspace.
+	// Empty means any agent herdr recognises will do, and that prutil cannot
+	// start one.
 	AgentKind string `yaml:"agent_kind"`
-	// PreferActiveAgent uses any agent already working on the pull request
-	// before filtering by AgentKind. When true (the default), AgentKind is the
-	// default harness to start when provisioning and a tie-breaker when
-	// multiple agents match at the same tier and readiness.
+	// PreferActiveAgent lets an agent of another kind take the work when it is
+	// already working on the pull request. AgentKind still decides what prutil
+	// starts, what the repo fallback reaches, and which of two equally good
+	// agents wins. Off by default, so an installation that set AgentKind to
+	// restrict handoffs keeps that restriction.
 	PreferActiveAgent bool `yaml:"prefer_active_agent"`
 	// Fallback governs the action taken when no active agent matches the
 	// pull request's head branch ("new", "none", or "repo").
@@ -318,12 +319,11 @@ func (w WatchConfig) ReviewFilter() model.ReviewFilter {
 func DefaultConfig() Config {
 	return Config{
 		Herdr: HerdrConfig{
-			PreferActiveAgent: true,
-			Fallback:          FallbackNew,
-			Prompt:            DefaultPrompt,
-			CheckPrompt:       DefaultCheckPrompt,
-			WaitForIdle:       Duration(15 * time.Minute),
-			Toast:             true,
+			Fallback:    FallbackNew,
+			Prompt:      DefaultPrompt,
+			CheckPrompt: DefaultCheckPrompt,
+			WaitForIdle: Duration(15 * time.Minute),
+			Toast:       true,
 		},
 		Watch: WatchConfig{
 			ActiveInterval:      Duration(30 * time.Second),
