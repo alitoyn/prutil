@@ -139,9 +139,14 @@ func DefaultConfigTemplate() []byte {
 	out.WriteString("  # person who registers that name does not inherit its trust.\n")
 	writeSequence(&out, "trusted_authors", cfg.Security.TrustedAuthors)
 	out.WriteString("  # Hand work automatically only to agents their vendor's sandbox contains, and\n")
-	out.WriteString("  # refuse to start one whose policy does not sandbox it. Applies to Claude Code\n")
-	out.WriteString("  # today; W and F can still use an agent that is not sandboxed.\n")
+	out.WriteString("  # refuse to start one whose policy does not sandbox it. Applies to Claude Code,\n")
+	out.WriteString("  # Copilot CLI and agy; W and F can still use an agent that is not sandboxed.\n")
 	_, _ = fmt.Fprintf(&out, "  require_sandbox: %t\n", cfg.Security.RequireSandbox)
+	out.WriteString("  # UNSAFE. Let require_sandbox accept agy on its built-in terminal sandbox alone,\n")
+	out.WriteString("  # without an explicit restrictive policy. The commands agy must run unsandboxed\n")
+	out.WriteString("  # to reach the network, git and gh among them, can run anything. See\n")
+	out.WriteString("  # docs/security/prompt-injection.md before turning it on.\n")
+	_, _ = fmt.Fprintf(&out, "  allow_unsafe_agy: %t\n", cfg.Security.AllowUnsafeAgy)
 
 	return []byte(out.String())
 }

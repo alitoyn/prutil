@@ -753,12 +753,24 @@ func allSettings() []settingDescriptor {
 			section: "SECURITY",
 			title:   "Require a sandboxed agent",
 			detail: "Hand work automatically only to agents their vendor's sandbox contains, and refuse to start one " +
-				"whose policy does not sandbox it. Applies to Claude Code today. W and F can still use any agent.",
+				"whose policy does not sandbox it. Applies to Claude Code, Copilot CLI and agy. W and F can still use any agent.",
 			def:  "on",
 			path: []string{"security", "require_sandbox"},
 		}, field[bool]{
 			get: func(c *home.Config) bool { return c.Security.RequireSandbox },
 			set: func(c *home.Config, v bool) { c.Security.RequireSandbox = v },
+		}),
+		boolSetting(settingMeta{
+			id:      "security.allow_unsafe_agy",
+			section: "SECURITY",
+			title:   "Accept agy's best-effort sandbox (unsafe)",
+			detail: "Count agy as sandboxed on its built-in terminal sandbox alone, without a restrictive policy. " +
+				"Commands it runs unsandboxed, such as git and gh, can run anything.",
+			def:  "off",
+			path: []string{"security", "allow_unsafe_agy"},
+		}, field[bool]{
+			get: func(c *home.Config) bool { return c.Security.AllowUnsafeAgy },
+			set: func(c *home.Config, v bool) { c.Security.AllowUnsafeAgy = v },
 		}),
 		trustSetting(settingMeta{
 			id:      "security.trusted_associations",

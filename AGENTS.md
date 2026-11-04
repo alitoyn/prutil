@@ -501,9 +501,8 @@ the viewer is known, which `loadOpen` asks `Client.Viewer` for while it is not.
 `internal/sandbox` holds one `Profile` per kind of agent. `Launch` returns
 the agent's arguments with what can be established before it starts; `Inspect`
 checks one already running. Claude Code has a vendor status command. Copilot
-CLI checks its launch flags and requires an explicit restrictive user-owned
-settings policy; agy runs inside its built-in terminal sandbox by default unless
-`--dangerously-skip-permissions` or a permissive user settings file disables it.
+CLI and agy have profiles that check their launch flags and user-owned settings
+instead; a missing or permissive policy is not counted as contained.
 `docs/security/prompt-injection.md` records what was verified for each vendor
 and what still needs live probes.
 
@@ -535,6 +534,16 @@ The rules, again each one a thing that looks like a tidy-up and is not:
   `pushInsteadOf` both, because a reader's host-level rewrite to SSH is as long
   as any host-level rule prutil could write.
   `TestTheGitRulesWinAgainstAReadersSSHRewrite` runs real git to pin it.
+- **agy's looser reading is `BestEffort`, never `Contained`.** agy's built-in
+  terminal sandbox is on by default, but agy cannot reach the network from it,
+  so a working agy needs `unsandboxed(git)` or `unsandboxed(gh)`, and both run
+  any command. The profile reports both verdicts and `Dispatcher.accepts`
+  decides, honouring `BestEffort` only under `security.allow_unsafe_agy`. Do
+  not fold the opt-in into the profile, and do not let it reach Claude or
+  Copilot: the profile has no config, the posture cache is shared, and the
+  WATCH history must say `best-effort sandbox` rather than `sandboxed`. Even
+  the best-effort reading requires `--sandbox` on the command line and refuses
+  any `unsandboxed(...)` rule naming a shell, an interpreter or a wrapper.
 - **A prompt line may not begin with `!`.** Claude Code runs it as a shell
   command without the model, and outside the sandbox. `herdr.Client.Prompt`
   refuses one, whichever vendor the prompt is for.

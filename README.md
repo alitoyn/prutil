@@ -62,6 +62,7 @@ Replies, commits and re-run checks come from the agent.
 | Set up a workspace and agent when none is on the pull request | any send that finds no agent | `herdr.fallback`: `new`, `none` or `repo`; `W` always may | `new` |
 | [Hold work from untrusted commenters](#configuration) | every send; a second press of `W` or `F` sends once anyway | `security.trusted_associations`, `security.trusted_authors` | on |
 | [Require a sandboxed agent](#sandboxed-agents) | every automatic send | `security.require_sandbox` | on |
+| [Accept agy's best-effort sandbox (unsafe)](#sandboxed-agents) | every automatic send to agy, and every agy start | `security.allow_unsafe_agy` | off |
 | Post an AI review comment | `R`, pressed twice | `review.comment`, `review.repos` | `/gemini review` |
 | [Post a comment when checks pass](#posting-a-comment-when-checks-pass) | on its own once armed with `P`, once per head commit | `checks_passed.comment`, `checks_passed.repos` | off, no comment |
 | [Desktop notification on approval](#desktop-notifications) | on its own, every 2 minutes | `notifications.events.approved`, `watch.list_interval` | on |
@@ -714,6 +715,7 @@ security:
     - "gemini-code-assist[bot]"  # [bot] matches only a GitHub App
     - "copilot-pull-request-reviewer[bot]"  # GitHub Copilot code review
   require_sandbox: true        # automatic handoffs only to sandboxed agents
+  allow_unsafe_agy: false      # UNSAFE: accept agy on its built-in sandbox alone
 ```
 
 Discovery roots are walked four levels deep, and a checkout's origin remote is
@@ -832,16 +834,37 @@ or relocate sign-in.
 paths to `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/herdr` and
 `~/.config/prutil` in `sandbox.userPolicy.filesystem.deniedPaths`.
 
-**For agy**, commands run inside its built-in terminal sandbox by default, so a
-normal `agy` session is accepted as contained unless `--dangerously-skip-permissions`
-was passed or `~/.gemini/antigravity-cli/settings.json` sets
-`enableTerminalSandbox: false`, sets `toolPermission` to a value other than
-`""` (unset), `"ask"`, or `"proceed-in-sandbox"`, or includes a wildcard
-`unsandboxed` (`unsandboxed` / `unsandboxed(*)`) or wildcard `read_url(*)` /
-`execute_url(*)` rule in `permissions.allow`. Command-specific
-`unsandboxed(<cmd>)` rules are accepted so network-dependent tools like `gh` or
-`git` can run, though any allowed command prefix remains callable by the agent
-without a prompt and should be scoped as narrowly as practical.
+**For agy**, there are two levels, and only the first is on by default.
+
+- *Sandboxed.* Start agy with `--sandbox`, and in
+  `~/.gemini/antigravity-cli/settings.json` set `enableTerminalSandbox: true`,
+  `toolPermission: "proceed-in-sandbox"`, and restricted `read_url(domain)`
+  entries in `permissions.allow`, with no `unsandboxed` rule of any kind and no
+  wildcard URL rule. With a missing or looser policy, automatic handoffs to agy
+  are refused.
+- *Best effort, opt-in.* agy's built-in terminal sandbox has no network and no
+  domain proxy, so agy cannot push or reply on a thread without an
+  `unsandboxed(...)` rule for git or gh, which the first level forbids. Set
+  `security.allow_unsafe_agy: true` (or "Accept agy's best-effort sandbox" in
+  the `s` pane) to accept agy on its built-in sandbox alone. prutil still
+  requires `--sandbox` on the command line, and still refuses
+  `--dangerously-skip-permissions`, `enableTerminalSandbox: false`, a
+  `toolPermission` other than unset, `"ask"` or `"proceed-in-sandbox"`, wildcard
+  or empty `read_url` / `execute_url` rules, and any `unsandboxed(...)` rule
+  that is bare, empty, holds a glob or shell syntax, or names a shell, an
+  interpreter or a command wrapper (`bash`, `python`, `node`, `env`, `xargs`,
+  `sudo` and the like).
+
+  **This is not a sandbox you can rely on.** An `unsandboxed(git)` or
+  `unsandboxed(gh)` rule still lets the agent run any command outside the
+  sandbox (`git -c alias.x='!sh …'`, `core.sshCommand`, gh aliases and
+  extensions), so feedback that talks the agent into it reaches your SSH keys,
+  your cloud credentials, and the settings file prutil reads to decide all of
+  this. prutil reads only your user-level settings, so a project-level agy
+  setting in the pull request's own branch, if agy honours one, is not seen.
+  Turn it on only for repositories whose commenters you trust, and keep the
+  trust settings below strict. The WATCH history and `handoffs.jsonl` record
+  such a handoff as `best-effort sandbox`, not `sandboxed`.
 
 These checks
 are **not proof of OS isolation**: a live agent must still verify secret

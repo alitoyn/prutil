@@ -817,11 +817,18 @@ func (d *Dispatcher) contain(ctx context.Context, req Request, pane, fallbackDir
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not prepare the %s sandbox: %w", kind, err)
 	}
-	if !launch.Posture.Contained && d.security.RequireSandbox {
+	if !d.accepts(launch.Posture) && d.security.RequireSandbox {
 		return nil, &launch.Posture, fmt.Errorf("%w: prutil would start %s with %s; "+
 			"fix its policy, or set security.require_sandbox: false", ErrUncontained, kind, launch.Posture.Detail)
 	}
 	return launch.Args, &launch.Posture, nil
+}
+
+// accepts says whether a posture satisfies security.require_sandbox. A
+// best-effort sandbox does only when the reader opted in to it, and only agy
+// reports one.
+func (d *Dispatcher) accepts(p sandbox.Posture) bool {
+	return p.Contained || (p.BestEffort && d.security.AllowUnsafeAgy)
 }
 
 // posture asks what an agent already running was launched into. Anything
@@ -993,7 +1000,7 @@ func (d *Dispatcher) pick(ctx context.Context, agents []herdr.Agent, pr model.Pu
 			if d.sandbox.Supports(agent.Kind) {
 				p := d.posture(ctx, agent)
 				c.posture = &p
-				if !p.Contained {
+				if !d.accepts(p) {
 					uncontained = append(uncontained, c)
 					continue
 				}

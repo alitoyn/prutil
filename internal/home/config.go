@@ -167,8 +167,15 @@ type SecurityConfig struct {
 	// RequireSandbox keeps automatic handoffs to agents their vendor's
 	// sandbox contains, and stops prutil starting one whose policy does not
 	// sandbox it. It applies only to kinds prutil has a sandbox profile for,
-	// which today is Claude Code; the others are handled as they always were.
+	// which today are Claude Code, Copilot CLI and agy; the others are handled
+	// as they always were.
 	RequireSandbox bool `yaml:"require_sandbox"`
+	// AllowUnsafeAgy lets RequireSandbox accept agy on its built-in terminal
+	// sandbox alone, without the explicit restrictive policy it otherwise
+	// needs. agy cannot be asked whether its sandbox is on, and the commands it
+	// must run unsandboxed to reach the network, git and gh among them, can
+	// run anything. Off by default.
+	AllowUnsafeAgy bool `yaml:"allow_unsafe_agy"`
 }
 
 // TrustPolicy is the whole trust question as the model asks it: whose feedback

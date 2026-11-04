@@ -114,46 +114,64 @@ func TestCopilotInspectReadsTheSelectedHomeWithoutRewritingIt(t *testing.T) {
 		"the reader's settings must not be replaced or moved")
 }
 
-func TestAgyLaunchUsesTheBuiltInTerminalSandboxByDefault(t *testing.T) {
+func agySettingsPath(home string) string {
+	return filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
+}
+
+func TestAgyLaunchIsBestEffortUntilTheReaderWritesARestrictivePolicy(t *testing.T) {
 	s, env := newSandbox(t, &fakeClaude{})
-	path := filepath.Join(env.Home, ".gemini", "antigravity-cli", "settings.json")
 	l, err := s.Launch(context.Background(), "agy", target(t.TempDir()))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--sandbox"}, l.Args)
-	assert.True(t, l.Posture.Contained, "agy runs inside its built-in terminal sandbox by default")
-	assert.False(t, l.Posture.Strict, "a person can approve an unsandboxed command")
+	assert.False(t, l.Posture.Contained, "a missing policy is not evidence of safety")
+	assert.True(t, l.Posture.BestEffort, "but the built-in terminal sandbox is on by default")
+	assert.Contains(t, l.Posture.Detail, "security.allow_unsafe_agy", "and the reader is told how to accept it")
 
-	writeVendorPolicy(t, path, map[string]any{"enableTerminalSandbox": false})
+	writeVendorPolicy(t, agySettingsPath(env.Home), agyPolicy())
 	l, err = s.Launch(context.Background(), "agy", target(t.TempDir()))
 	require.NoError(t, err)
-	assert.False(t, l.Posture.Contained, "turning the terminal sandbox off in settings.json disables containment")
+	assert.True(t, l.Posture.Contained)
+	assert.False(t, l.Posture.BestEffort)
+	assert.False(t, l.Posture.Strict, "a person can approve an unsandboxed command")
+
+	writeVendorPolicy(t, agySettingsPath(env.Home), map[string]any{"enableTerminalSandbox": false})
+	l, err = s.Launch(context.Background(), "agy", target(t.TempDir()))
+	require.NoError(t, err)
+	assert.False(t, l.Posture.Contained)
+	assert.False(t, l.Posture.BestEffort, "switching the terminal sandbox off is not even best effort")
 }
 
-func TestAgyInspectRejectsAnUncontainedCommandOrPolicy(t *testing.T) {
+func TestAgyInspectRejectsWhatEscapesTheSandboxEvenAtBestEffort(t *testing.T) {
+	sandboxed := []string{"agy", "--sandbox"}
+	allow := func(rules ...string) func(map[string]any) {
+		return func(doc map[string]any) { doc["permissions"] = map[string]any{"allow": rules} }
+	}
 	for _, tc := range []struct {
 		name   string
 		argv   []string
 		change func(map[string]any)
 	}{
-		{"a command line that skips permissions", []string{"agy", "--dangerously-skip-permissions"}, nil},
-		{"a policy without the terminal sandbox", []string{"agy"}, func(doc map[string]any) {
+		{"a command line that skips permissions", []string{"agy", "--sandbox", "--dangerously-skip-permissions"}, nil},
+		{"a command line without --sandbox", []string{"agy"}, nil},
+		{"a command line that negates the sandbox flag", []string{"agy", "--sandbox", "--no-sandbox"}, nil},
+		{"a command line that sets the sandbox flag false", []string{"agy", "--sandbox=false"}, nil},
+		{"a policy without the terminal sandbox", sandboxed, func(doc map[string]any) {
 			doc["enableTerminalSandbox"] = false
 		}},
-		{"a policy with a tool permission that bypasses sandbox approval", []string{"agy"}, func(doc map[string]any) {
+		{"a policy with a tool permission that bypasses sandbox approval", sandboxed, func(doc map[string]any) {
 			doc["toolPermission"] = "proceed-always"
 		}},
-		{"a policy that allows reading any URL", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"] = map[string]any{"allow": []string{"read_url(*)"}}
-		}},
-		{"a policy that allows executing any URL", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"] = map[string]any{"allow": []string{"execute_url(*)"}}
-		}},
-		{"a policy that allows unsandboxed commands by wildcard", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"] = map[string]any{"allow": []string{"unsandboxed(*)"}}
-		}},
-		{"a policy that allows bare unsandboxed commands", []string{"agy"}, func(doc map[string]any) {
-			doc["permissions"] = map[string]any{"allow": []string{"unsandboxed"}}
-		}},
+		{"a policy that allows reading any URL", sandboxed, allow("read_url(*)")},
+		{"a policy that allows executing any URL", sandboxed, allow("execute_url(*)")},
+		{"a policy that allows reading an empty URL pattern", sandboxed, allow("read_url()")},
+		{"a policy that allows unsandboxed commands by wildcard", sandboxed, allow("unsandboxed(*)")},
+		{"a policy that allows bare unsandboxed commands", sandboxed, allow("unsandboxed")},
+		{"a policy that allows an empty unsandboxed rule", sandboxed, allow("unsandboxed()")},
+		{"a policy that allows a shell unsandboxed", sandboxed, allow("unsandboxed(bash -c)")},
+		{"a policy that allows a versioned interpreter by path", sandboxed, allow("unsandboxed(/usr/bin/python3.12)")},
+		{"a policy that allows a command wrapper unsandboxed", sandboxed, allow("unsandboxed(env)")},
+		{"a policy that allows shell syntax after a named command", sandboxed, allow("unsandboxed(git status; curl x | sh)")},
+		{"a policy that allows a glob in a command", sandboxed, allow("unsandboxed(gi?)")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, env := newSandbox(t, &fakeClaude{})
@@ -161,48 +179,57 @@ func TestAgyInspectRejectsAnUncontainedCommandOrPolicy(t *testing.T) {
 			if tc.change != nil {
 				tc.change(doc)
 			}
-			writeVendorPolicy(t, filepath.Join(env.Home, ".gemini", "antigravity-cli", "settings.json"), doc)
+			writeVendorPolicy(t, agySettingsPath(env.Home), doc)
 			p, err := s.Inspect(context.Background(), "agy", t.TempDir(), tc.argv)
 			require.NoError(t, err)
 			assert.True(t, p.Known)
 			assert.False(t, p.Contained)
+			assert.False(t, p.BestEffort)
 		})
 	}
 }
 
-func TestAgyInspectAcceptsDefaultAndSandboxedSessions(t *testing.T) {
+func TestAgyInspectCountsAPermissivePolicyAsBestEffortOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		argv []string
 		doc  map[string]any
 	}{
-		{
-			name: "a normal agy launch with no settings file",
-			argv: []string{"agy"},
-		},
-		{
-			name: "a normal agy launch with an explicit sandbox policy",
-			argv: []string{"agy"},
-			doc:  agyPolicy(),
-		},
-		{
-			name: "an agy launch with --sandbox, ask tool permission, and user allowlist entries",
-			argv: []string{"agy", "--sandbox"},
-			doc:  map[string]any{"toolPermission": "ask", "permissions": map[string]any{"allow": []string{"sandboxed(git status)", "unsandboxed(gh pr)"}}},
-		},
+		{name: "no settings file"},
+		{name: "a policy that leaves the terminal sandbox at its default", doc: map[string]any{"toolPermission": "proceed-in-sandbox",
+			"permissions": map[string]any{"allow": []string{"read_url(github.com)"}}}},
+		{name: "a policy that asks and allows named commands unsandboxed", doc: map[string]any{"toolPermission": "ask",
+			"permissions": map[string]any{"allow": []string{"sandboxed(git status)", "unsandboxed(gh pr)", "unsandboxed(git)"}}}},
+		{name: "an otherwise restrictive policy with one named command unsandboxed", doc: func() map[string]any {
+			doc := agyPolicy()
+			doc["permissions"] = map[string]any{"allow": []string{"read_url(github.com)", "unsandboxed(gh)"}}
+			return doc
+		}()},
+		{name: "a restrictive policy with no read_url domain", doc: map[string]any{"enableTerminalSandbox": true,
+			"toolPermission": "proceed-in-sandbox"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, env := newSandbox(t, &fakeClaude{})
 			if tc.doc != nil {
-				writeVendorPolicy(t, filepath.Join(env.Home, ".gemini", "antigravity-cli", "settings.json"), tc.doc)
+				writeVendorPolicy(t, agySettingsPath(env.Home), tc.doc)
 			}
-			p, err := s.Inspect(context.Background(), "agy", t.TempDir(), tc.argv)
+			p, err := s.Inspect(context.Background(), "agy", t.TempDir(), []string{"agy", "--sandbox"})
 			require.NoError(t, err)
 			assert.True(t, p.Known)
-			assert.True(t, p.Contained)
-			assert.False(t, p.Strict)
+			assert.False(t, p.Contained)
+			assert.True(t, p.BestEffort)
+			assert.Equal(t, "best-effort sandbox", p.String())
 		})
 	}
+}
+
+func TestAgyInspectIsContainedWithAnExplicitRestrictivePolicy(t *testing.T) {
+	s, env := newSandbox(t, &fakeClaude{})
+	writeVendorPolicy(t, agySettingsPath(env.Home), agyPolicy())
+	p, err := s.Inspect(context.Background(), "agy", t.TempDir(), []string{"agy", "--sandbox"})
+	require.NoError(t, err)
+	assert.True(t, p.Contained)
+	assert.False(t, p.BestEffort)
+	assert.False(t, p.Strict)
 }
 
 func TestMalformedVendorPolicyIsAnErrorRatherThanAContainedAnswer(t *testing.T) {
